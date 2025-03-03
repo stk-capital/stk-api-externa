@@ -16,3 +16,9 @@ uvicorn[standard]
 websockets
 SQLAlchemy>=1.4
 camelot-py
+python-dotenv
+msal
+requests
+bs4
+websockets
+python-multipart

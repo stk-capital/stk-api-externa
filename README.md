@@ -1,1 +1,0 @@
-# stk-api-externa
