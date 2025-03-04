@@ -23,8 +23,6 @@ from langchain_core.messages import HumanMessage, AIMessage,FunctionMessage,Syst
 from langchain_groq import ChatGroq
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 
-from functools import lru_cache
-
 # Configuring
 dotenv.load_dotenv()
 logger = logging.getLogger(__name__)
@@ -33,13 +31,15 @@ client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
 db = client.crewai_db
 
 # Global variables
-list_system_default_variables = ['type', 'content', 'source', 'route', 'id', 'content_type', 'name','content_extension']
+list_system_default_variables = ['type', 'content', 'source', 'route', 'id', 'content_type', 'name']
 
 # Auxiliary functions
 def extract_brace_arguments(text):
-    # Regular expression to match {{key:value}} pairs, including multiline content
+    # Regular expression to match {{key:value}} pairs
+    # text = '''The screen is still black. It might be in sleep mode or powered off. Let's try pressing a key to wake it up.{{route:Desktop Hotkey}}{{keys:["space"]}}'''
+    # print("text:"+text)
     pattern = r"\{\{(.*?)\}\}"
-    matches = re.findall(pattern, str(text), re.DOTALL)
+    matches = re.findall(pattern, str(text))
 
     # Dictionary to store extracted key-value pairs
     extracted_dict = {}
@@ -48,41 +48,12 @@ def extract_brace_arguments(text):
         try:
             # Split the match into key and value at the first colon
             key, value = match.split(':', 1)
-            key = key.strip()
-            value = value.strip()
-
-            # If value starts with [ or {, assume it's a JSON structure
-            if value.startswith('[') or value.startswith('{'):
-                # Replacing any line breaks or extra spaces for proper JSON parsing
-                value = value.replace('\n', '').replace('\r', '').strip()
-                try:
-                    # Parse the JSON content
-                    extracted_dict[key] = json.loads(value)
-                except json.JSONDecodeError as e:
-                    
-                    extracted_dict[key] = value  # Fallback to raw string if JSON parsing fails
-            else:
-                extracted_dict[key] = value
+            extracted_dict[key.strip()] = value.strip()
         except ValueError:
             # Handle cases where there is no colon in the match
             continue
 
     return extracted_dict
-
-@lru_cache(maxsize=100)  # Cache the last 100 processed PDFs
-def cached_process_pdf(file_path):
-    tables = camelot.read_pdf(file_path, pages='all', flavor='stream')
-    json_tables = {}
-    for idx, table in enumerate(tables):
-        cleaned_table = table.df.dropna(how='all').reset_index(drop=True)
-        json_tables[f'Table_{idx+1}'] = cleaned_table.to_dict(orient='records')
-    
-    return json_tables
-
-# Replace the original process_pdf function with this wrapper
-def process_pdf(file_path):
-    return cached_process_pdf(file_path)
-
 
 # Main functions
 async def create_tool(tool_data: Dict[str, Any]):
@@ -217,12 +188,12 @@ async def create_agent(agent_data: Dict[str, Any], graph_id: str = None):
             # e o grafo funcionou conforme o esperado.
             # Precisamos revisar esta parte para garantir que o agente tenha liberdade
             # para escolher a rota apropriada, mas ainda siga as regras do grafo.
- 
-        goal += '''
-                
-                You should never return an output without routing to your given nodes always {{route:given_target}}
-                
-                '''
+        if len(target_nodes) > 1 or any(node['type'] != 'end' for node in target_nodes):
+            goal += '''
+                    
+                    You should never return an output without routing to your given nodes always {{route:given_target}}
+                    
+                    '''
         
         if target_nodes:
             
@@ -293,15 +264,6 @@ async def create_agent(agent_data: Dict[str, Any], graph_id: str = None):
                     
                     state[i] = HumanMessage(content=[{"type": "text", f"text": f'''Image{i+1}'''},
                                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_data}"}}])
-            #Threat for pdf
-            # elif ('content_type', 'pdf') in [k for j,k in enumerate(state[i])] and state[i].content.startswith('/tmp/') :
-            #     pdf_url = state[i].content
-            #     json_tables = process_pdf(pdf_url)
-                
-            #     kwargs = state[i].__dict__
-            #     kwargs['content'] = str(json_tables)
-                
-            #     state[i] = HumanMessage(**kwargs)
 
         #solve for if model is "claude" based then none two sucessive message can be assistant messages or(AIMessages)
         if "claude" in llm_data['model']:
@@ -323,82 +285,66 @@ async def create_agent(agent_data: Dict[str, Any], graph_id: str = None):
     def function_instance(input: List[AIMessage]):
         """
         Executes the main logic of the agent.
-
-        This function is responsible for processing the input, interacting with the language model (LLM),
-        and formatting the output for the next step in the graph flow.
-
-        Args:
-            input (List[AIMessage]): A list of input messages, representing the conversation
-                                     history up to this point.
-
-        Returns:
-            List[AIMessage]: The updated list of messages, including the agent's new response.
-
-        Execution flow:
-        1. Configures the language model (LLM) based on the agent's data.
-        2. Formats the current state for sending to the LLM.
-        3. Invokes the LLM with the formatted state.
-        4. Processes the LLM's output, extracting variables and ensuring a valid route.
-        5. Adds the processed response to the list of messages.
         """
+        def initialize_llm():
+            temperature = agent_data['temperature']
+            map_dict = {
+                "GROQ": ChatGroq,
+                "NIM": ChatNVIDIA,
+                "OPENAI": ChatOpenAI,
+                "ANTHROPIC": ChatAnthropic,
+                "GOOGLE": ChatGoogleGenerativeAI
+            }
+            return map_dict[llm_data['baseURL']](
+                model=llm_data['model'],
+                api_key=llm_data['apiKey'],
+                temperature=temperature
+            )
 
-        # Defines the temperature for the LLM
-        temperature = agent_data['temperature']
+        def log_state(prefix, state):
+            with open('state.json', 'w') as f:
+                json.dump(f"{prefix}:{str(state)}", f)
 
-        map_dict = {"GROQ":ChatGroq,"NIM":ChatNVIDIA,"OPENAI":ChatOpenAI,"ANTHROPIC":ChatAnthropic,"GOOGLE":ChatGoogleGenerativeAI}
+        def process_llm_output(function_output):
+            variables_dict = extract_brace_arguments(function_output)
+            handle_routing(variables_dict, function_output)
+            ensure_content(variables_dict, function_output)
+            variables_dict['source'] = agent_data['name']
+            return variables_dict
 
-        llm = map_dict[llm_data['baseURL']](model=llm_data['model'],api_key=llm_data['apiKey'],temperature=temperature)
+        def handle_routing(variables_dict, function_output):
+            
+            if len(all_targets) > 1:
+                if 'route' not in variables_dict:
+                    variables_dict['route'] = agent_data['name']
+                    variables_dict['content'] = add_routing_message(function_output, " I forgot to provide the routing of the next node, so the message go back to me. Im going to think about it and provide the routing in the next message")
+                elif not is_valid_route(variables_dict.get('route')):
+                    variables_dict['route'] = agent_data['name']
+                    variables_dict['content'] = add_routing_message(function_output, "I forgot to provide a routing to a node available to me, so the message go back to me. Im going to think about it and provide the right routing in the next message")
 
-        state = format_state(input,goal=agent_data['goal'],target_nodes=all_targets)
+        def is_valid_route(route):
+            valid_routes = [i["label"] for i in all_targets]
+            return route in valid_routes or (route == 'END' and 'End' in valid_routes)
 
-        #log state in a file
-        with open('state.json', 'w') as f:
-            json.dump("Input:"+str(state), f)
+        def add_routing_message(content, reason):
+            return f"{content}\nI {reason} of the next node, so the message goes back to me. I'm going to think about it and provide the correct routing in the next message."
 
+        def ensure_content(variables_dict, function_output):
+            if 'content' not in variables_dict:
+                variables_dict['content'] = function_output
+
+        # Main execution flow
+        llm = initialize_llm()
+        state = format_state(input, goal=agent_data['goal'], target_nodes=all_targets)
+
+        log_state("Input", state)
         function_output = llm.invoke(state).content
- 
-        with open('state.json', 'w') as f:
-            json.dump("Output:"+str(state), f)
-        variables_dict = extract_brace_arguments(function_output)
+        log_state("Output", state)
 
-        
-        if 'route' not in variables_dict and len(all_targets) > 1:
-            variables_dict['route'] = agent_data['name']
-            function_output += '''
-            I forgot to provide the routing of the next node, so the message go back to me. 
-            I'm going to think about it and provide the routing in the next message
-            '''
-        elif variables_dict['route'] not in [i["label"] for i in all_targets] and (variables_dict['route']=='END' and 'End' not in [i["label"] for i in all_targets]):
-            # print("All Targets"+str(all_targets))
-            # print("route"+str(variables_dict['route']))
-            variables_dict['route'] = agent_data['name']
-            function_output += '''
-            
-            I forgot to provide a routing to a node available to me, so the message go back to me. Im going to think about it and provide the right routing in the next message
-            
-            '''
-        elif variables_dict['route'] not in [i["label"] for i in all_targets] and (variables_dict['route']=='END' and 'End' not in [i["label"] for i in all_targets]):
-            # print("All Targets"+str(all_targets))
-            # print("route"+str(variables_dict['route']))
-            variables_dict['route'] = agent_data['name']
-            function_output += '''
-            I forgot to provide the routing of the next node, so the message go back to me. Im going to think about it and provide the routing in the next message
-            
-            '''
-
-        # Ensures there is content in the output
-        if 'content' not in variables_dict:
-            variables_dict['content'] = function_output
-        
-        # Adds the message source
-        variables_dict['source'] = agent_data['name']
-        
-        # Adds the new message to the input list
+        variables_dict = process_llm_output(function_output)
         input.append(AIMessage(**variables_dict))
 
-        #DEBUG:
-        # print("Input:" + str(input))
-
+        print("Input:" + str(input))  # DEBUG
         return input
 
     return function_instance
@@ -470,20 +416,7 @@ async def convert_to_langgraph(graph_data: Dict[str, Any]) -> MessageGraph:
 
     return workflow.compile()
 
-
-async def detect_output_content_type(output):
-
-    if output.startswith('/tmp/'):
-        _, ext = os.path.splitext(output)
-        if ext.lower() in['.png','.jpg','.jpeg','.gif','.bmp']:
-            return {"content_extension":ext.lower()[1:],"content_type":'image'}
-        if ext.lower() == '.pdf': 
-            return {"content_extension":ext.lower()[1:],"content_type":'pdf'}
-
-    return {"content_extension":"text","content_type":'text'}
-
-
-async def execute_graph(graph_data: Dict[str, Any], input_data: str, file_paths: List[str] = None):
+async def execute_graph(graph_data: Dict[str, Any], input_data: str):
     # Main execution function
     #input_data = '{{user_name:ruhany}} {{user_email:ruhcsadvasd}}'
     try:
@@ -491,17 +424,9 @@ async def execute_graph(graph_data: Dict[str, Any], input_data: str, file_paths:
 
         variables_dict = extract_brace_arguments(input_data)
         relevant_arguments = variables_dict
-
-        if file_paths:
-            relevant_arguments['file_paths'] = file_paths
         
-        initial_state = []
-        for file_path in file_paths or []:
-            conten_type = await detect_output_content_type(file_path)
-            initial_state.append(HumanMessage(content=file_path, source='User', **conten_type))
-        initial_state.append(HumanMessage(content=input_data, source='User', **relevant_arguments))
+        for step in graph.stream([HumanMessage(content=input_data,source='User',**relevant_arguments)]):
 
-        for step in graph.stream(initial_state):
 
             # Convert the step data to a JSON-serializable format
             serializable_step = {}
@@ -523,3 +448,4 @@ async def execute_graph(graph_data: Dict[str, Any], input_data: str, file_paths:
         error_message = f"Error during graph execution: {str(e)}"
         logger.exception(error_message)
         yield json.dumps({"error": error_message})
+

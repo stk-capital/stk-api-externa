@@ -11,6 +11,8 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from pymongo import MongoClient, errors
 
+# Airflow imports
+
 from datetime import datetime, timedelta
 
 # Environment variables are assumed to be defined in functions.env
@@ -242,7 +244,7 @@ async def connect_to_graph_execution(
     graph_id: str, initial_message: str, timeout_seconds: float = 30,
     retry_attempts: int = 5
 ) -> List[Dict[str, Any]]:
-    uri = f"ws://172.16.21.7:8000/api/graphs/{graph_id}/execute"
+    uri = f"ws://localhost:8000/api/graphs/{graph_id}/execute"
     attempt = 0
     while attempt < retry_attempts:
         try:
@@ -658,7 +660,10 @@ def _process_chunks():
     # Modified query to process only chunks marked as relevant (include=True)
     query = {"was_processed": False, "include": True}
     cursor = chunks_collection.find(query)
+    #grab first doc for debugging, its not a list,s o i cant use cursor[0], but it comes from cursor
+    
     for doc in cursor:
+        #doc = list(cursor)[0]
         try:
             chunk = Chunk(**doc)
         except Exception as e:
@@ -667,7 +672,7 @@ def _process_chunks():
 
         # Process companies from chunk.instrument_ids
         companies_ids = []
-        if chunk.instrument_ids:
+        if chunk.instrument_ids != []:
             for company in chunk.instrument_ids:
                 try:
                     company_embedding = get_embedding(company)
@@ -701,7 +706,7 @@ def _process_chunks():
 
         # Process source from chunk.source (assumed to be a single string)
         sources_ids = []
-        if chunk.source:
+        if chunk.source != "":
             try:
                 source_embedding = get_embedding(chunk.source)
             except Exception as e:
@@ -1001,6 +1006,95 @@ def _format_followers(count: int) -> str:
     return str(count)
 
 
+# -------------------------------
+# Airflow DAG Definition
+# -------------------------------
+
+def delete_documents_after_date():
+    # Set the cutoff date (February 28, 2025)
+    cutoff_date = datetime(2025, 2, 28, 23, 59, 59)
+    
+    # Get the collections
+    emails_coll = get_mongo_collection("alphasync_db", "emails")
+    chunks_coll = get_mongo_collection("alphasync_db", "chunks")
+    
+    # Delete emails created after the cutoff date
+    email_result = emails_coll.delete_many({"created_at": {"$gt": cutoff_date}})
+    print(f"Deleted {email_result.deleted_count} emails created after Feb 28, 2025")
+    
+    # Delete chunks created after the cutoff date
+    chunk_result = chunks_coll.delete_many({"created_at": {"$gt": cutoff_date}})
+    print(f"Deleted {chunk_result.deleted_count} chunks created after Feb 28, 2025")
+
+
+def process_full_pipeline(process_emails_count: int = 10) -> dict:
+    """
+    Executa o pipeline completo de processamento de emails em sequência:
+    1. Processa emails
+    2. Processa chunks
+    3. Cria usuários a partir de empresas
+    4. Cria posts a partir de informações
+    5. Registra resumo de processamento
+    
+    Args:
+        process_emails_count: Número de emails a serem processados
+        
+    Returns:
+        Um dicionário com detalhes do processamento
+    """
+    start_time = datetime.now()
+    results = {}
+    
+    # Etapa 1: Processar emails
+    print("Iniciando processamento de emails...")
+    _process_emails(n=process_emails_count)
+    results["emails_processed"] = process_emails_count
+    
+    # Etapa 2: Processar chunks
+    print("Iniciando processamento de chunks...")
+    chunks_result = _process_chunks()
+    results["chunks_processed"] = chunks_result if chunks_result else "Concluído"
+    
+    # Etapa 3: Criar usuários a partir de empresas
+    print("Criando usuários a partir de empresas...")
+    users_result = _create_users_from_companies()
+    results["users_created"] = users_result if users_result else "Concluído"
+    
+    # Etapa 4: Criar posts a partir de informações
+    print("Criando posts a partir de informações...")
+    posts_result = _create_posts_from_infos()
+    results["posts_created"] = posts_result if posts_result else "Concluído"
+    
+    # Etapa 5: Registrar resumo de processamento
+    print("Gerando resumo de processamento...")
+    _log_processing_summary(start_time)
+    
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    results["total_duration_seconds"] = duration
+    results["completed_at"] = end_time.isoformat()
+    
+    print(f"Pipeline completo executado em {duration:.2f} segundos")
+    return results
+
+#process full pipeline
+def process_full_pipeline(process_emails_count=10):
+
+
+    _process_emails(process_emails_count)
+    _process_chunks()
+    _create_users_from_companies()
+    _create_posts_from_infos()
+    results = _log_processing_summary(datetime.now() - timedelta(minutes=5))
+
+    #delete all emails created after 2025-03-03
+
+    return results
+
+
+
+
+
 # from pymongo import MongoClient
 # _process_emails(50)
 # _process_chunks()
@@ -1019,8 +1113,10 @@ def _format_followers(count: int) -> str:
 #     result = db2[coll].delete_many({})
 #     print(f"Deleted {result.deleted_count} documents from {coll}")
 
-#test all functions
-# _process_emails(50)[x]
-# _process_chunks()[x]
-# _create_users_from_companies()[]
-# _create_posts_from_infos()[]
+#test all functionsads
+# _process_emails(200)
+# _process_chunks()
+# _create_users_from_companies()
+# _create_posts_from_infos()
+# _log_processing_summary(datetime.now() - timedelta(minutes=5))
+
