@@ -21,3 +21,5 @@ requests
 bs4
 websockets
 python-multipart
+pytest
+pytest-asyncio

@@ -209,7 +209,7 @@ def get_last_n_emails(n: int = 10) -> List[Email]:
     Retrieve the last n emails via Outlook and insert new ones into MongoDB.
     """
     try:
-        from functions.modules.outlook_email import get_recent_emails
+        from outlook_email import get_recent_emails
         emails_data = get_recent_emails(top_n=n)
         collection = get_mongo_collection()
         email_objects = []
@@ -1024,4 +1024,3 @@ def _format_followers(count: int) -> str:
 # _process_chunks()[x]
 # _create_users_from_companies()[]
 # _create_posts_from_infos()[]
-# _log_processing_summary(datetime.now() - timedelta(minutes=5))
