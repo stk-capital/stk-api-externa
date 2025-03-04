@@ -22,7 +22,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, AIMessage,FunctionMessage,SystemMessage
 from langchain_groq import ChatGroq
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
-import camelot
+
 from functools import lru_cache
 
 # Configuring

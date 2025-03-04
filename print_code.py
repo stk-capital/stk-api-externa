@@ -20,7 +20,7 @@ def list_files(directory, output_dir):
         'pip-delete-this-directory.txt', '*.mo', '*.pot', '*.log', 'local_settings.py', 
         'db.sqlite3', 'db.sqlite3-journal', '.python-version', 'Pipfile.lock', 
         'poetry.lock', 'pdm.lock', '*.sage.py', '*.cover', '*.py,cover', 
-        'celerybeat.pid', '.idea/', 'code_contents.txt'
+        'celerybeat.pid', '.idea/', 'code_contents.txt','.env'
     ]
     included_extensions = ['.py', '.js', '.css', '.html', '.env','.tsx']
 
