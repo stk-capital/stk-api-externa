@@ -11,13 +11,10 @@ from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 from pymongo import MongoClient, errors
 
-# Airflow imports
-from airflow import DAG
-from airflow.operators.python import PythonOperator
 from datetime import datetime, timedelta
 
 # Environment variables are assumed to be defined in functions.env
-import functions.env as env
+import env
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -1004,47 +1001,6 @@ def _format_followers(count: int) -> str:
     return str(count)
 
 
-# -------------------------------
-# Airflow DAG Definition
-# -------------------------------
-default_args = {
-    "start_date": datetime(2023, 1, 1),
-    "retries": 3,
-    "retry_delay": timedelta(minutes=5),
-}
-
-with DAG(
-    "email_processing_pipeline",
-    default_args=default_args,
-    schedule_interval="@hourly",
-    catchup=False,
-    max_active_runs=1,
-) as dag:
-
-    process_emails = PythonOperator(
-        task_id="process_emails", python_callable=lambda: _process_emails(n=50)
-    )
-
-    process_chunks = PythonOperator(
-        task_id="process_chunks", python_callable=_process_chunks
-    )
-
-    process_feed_users = PythonOperator(
-        task_id="process_feed_users",
-        python_callable=_create_users_from_companies
-    )
-
-    process_feed_posts = PythonOperator(
-        task_id="process_feed_posts",
-        python_callable=_create_posts_from_infos
-    )
-
-    log_summary_op = PythonOperator(
-        task_id="log_summary",
-        python_callable=lambda: _log_processing_summary(datetime.now() - timedelta(minutes=5)),
-    )
-
-    process_emails >> process_chunks >> process_feed_users >> process_feed_posts >> log_summary_op
 # from pymongo import MongoClient
 # _process_emails(50)
 # _process_chunks()

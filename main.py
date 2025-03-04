@@ -27,14 +27,7 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-app = FastAPI(
-    title="STK API Externa",
-    description="API para integração externa STK Capital",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json"
-)
+app = FastAPI()
 
 # api_app = FastAPI()
 # app.mount("/api", api_app)
@@ -43,7 +36,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite todas as origens
+    allow_origins=["http://172.16.21.7:3000", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
