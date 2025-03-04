@@ -60,3 +60,6 @@ logs/
 # Arquivos específicos deste projeto
 **/uploads/*
 !**/uploads/.gitkeep
+
+#code_contents.txt
+code_contents.txt
