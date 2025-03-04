@@ -22,6 +22,15 @@ import env
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Added imports for email sending
+import random
+import traceback
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import os
+from dotenv import load_dotenv
+
 
 def uuid_str() -> str:
     """Generates a UUID string."""
@@ -893,12 +902,91 @@ def _create_users_from_companies():
             logger.error(f"Failed creating user for company {company['_id']}: {e}")
 
 
+def send_notification_email(posts_created, destination_email="ruhany.aragao@gmail.com"):
+    """
+    Envia um email de notificação quando novos posts forem criados pelo pipeline.
+    
+    Args:
+        posts_created: Lista de posts criados
+        destination_email: Email destinatário
+    """
+    try:
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
+        smtp_username = os.getenv("GMAIL_USER")
+        smtp_password = os.getenv("GMAIL_PASSWORD")
+        
+        if not smtp_username or not smtp_password:
+            logger.error("Configurações de Gmail ausentes. Não é possível enviar email.")
+            return False
+            
+        # Criando a mensagem
+        msg = MIMEMultipart()
+        msg['From'] = smtp_username
+        msg['To'] = destination_email
+        msg['Subject'] = f"STK API: {len(posts_created)} novos posts criados pelo pipeline"
+        
+        # Corpo do email
+        body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
+                .post {{ border: 1px solid #ccc; padding: 10px; margin-bottom: 15px; }}
+                .title {{ font-weight: bold; color: #333; }}
+                .content {{ color: #555; }}
+                .source {{ color: #888; font-style: italic; }}
+            </style>
+        </head>
+        <body>
+            <h2>Novos Posts Criados</h2>
+            <p>O pipeline de processamento de emails acabou de criar {len(posts_created)} novos posts:</p>
+        """
+        
+        # Adiciona até 5 posts na mensagem
+        for i, post in enumerate(posts_created[:5]):
+            body += f"""
+            <div class="post">
+                <div class="title">{post.get('title', 'Sem título')}</div>
+                <div class="content">{post.get('content', 'Sem conteúdo')[:150]}...</div>
+                <div class="source">Fonte: {post.get('source', 'Desconhecida')}</div>
+            </div>
+            """
+        
+        if len(posts_created) > 5:
+            body += f"<p>E mais {len(posts_created) - 5} posts foram criados...</p>"
+        
+        body += """
+            <p>Este é um email automatizado enviado pelo sistema de pipeline da STK API.</p>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(body, 'html'))
+        
+        # Conectando e enviando o email
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.send_message(msg)
+            
+        logger.info(f"Email de notificação enviado para {destination_email}")
+        return True
+            
+    except Exception as e:
+        logger.error(f"Erro ao enviar email de notificação: {str(e)}")
+        return False
+
+
 def _create_posts_from_infos():
     """Create STKFeed posts for new infos in alphasync_db"""
     infos_coll = get_mongo_collection("alphasync_db", "infos")
     posts_coll = get_mongo_collection("STKFeed", "posts")
     users_coll = get_mongo_collection("STKFeed", "users")
     sources_coll = get_mongo_collection("alphasync_db", "sources")
+    
+    # Para controle de novos posts criados
+    new_posts_created = []
     
     # Create a unique index to prevent duplicate posts
     try:
@@ -976,6 +1064,11 @@ def _create_posts_from_infos():
                 try:
                     result = posts_coll.insert_one(post.model_dump(by_alias=True))
                     logger.info(f"Created post with ID: {result.inserted_id} for info {info_id_str} and user {user_id_str}")
+                    
+                    # Adiciona o post à lista de novos posts criados
+                    post_data = post.model_dump(by_alias=True)
+                    post_data['_id'] = str(result.inserted_id)
+                    new_posts_created.append(post_data)
                 except errors.DuplicateKeyError:
                     logger.warning(f"Duplicate post detected for info {info_id_str} and user {user_id_str}")
                 except Exception as e:
@@ -983,6 +1076,13 @@ def _create_posts_from_infos():
                 
         except Exception as e:
             logger.error(f"Failed processing info {info.get('_id')}: {e}")
+    
+    # Envia email de notificação se novos posts foram criados
+    if new_posts_created:
+        logger.info(f"Enviando email de notificação para {len(new_posts_created)} novos posts criados")
+        send_notification_email(new_posts_created)
+    
+    return len(new_posts_created)
 
 
 def _relative_time(created_at: datetime) -> str:

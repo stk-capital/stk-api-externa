@@ -529,9 +529,31 @@ async def get_execution_logs(schedule_id: str):
     return [{"execution_time": log["execution_time"], "log": log.get("log"), "error": log.get("error")} for log in logs]
 
 
+# Agendador para o endpoint de pipeline
+async def pipeline_scheduler():
+    """
+    Função assíncrona que executa o endpoint de pipeline a cada 5 minutos.
+    """
+    logger.info("Iniciando o agendador do endpoint de pipeline")
+    while True:
+        try:
+            logger.info(f"Executando pipeline agendado em {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
+            await run_in_threadpool(process_full_pipeline, 10)  # Processa 10 emails por padrão
+            logger.info("Execução do pipeline concluída com sucesso")
+        except Exception as e:
+            logger.error(f"Erro na execução agendada do pipeline: {str(e)}")
+        
+        # Aguarda 5 minutos antes da próxima execução
+        await asyncio.sleep(300)  # 5 minutos = 300 segundos
+
 @app.on_event("startup")
 async def startup_event():
+    # Inicia o agendador de grafos
     asyncio.create_task(start_scheduler())
+    
+    # Inicia o agendador do endpoint de pipeline
+    asyncio.create_task(pipeline_scheduler())
+    logger.info("Agendadores iniciados com sucesso")
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
