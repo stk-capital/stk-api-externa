@@ -27,7 +27,14 @@ import sys
 from fastapi.concurrency import run_in_threadpool
 
 
-logging.basicConfig(level=logging.DEBUG)
+# Configure logging properly for Azure App Service
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(stream=sys.stdout)  # Force logs to stdout instead of stderr
+    ]
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -112,7 +119,7 @@ class AgentModel(BaseModel):
     temperature: Optional[float] = Field(ge=0, le=1)
 
     class Config:
-        pupulate_by_name = True
+        populate_by_name = True
         json_encoders = {ObjectId: str}
         arbitrary_types_allowed = True
 
@@ -330,13 +337,16 @@ async def pipeline_scheduler():
     logger.info("Iniciando o agendador do endpoint de pipeline")
     while True:
         try:
-            logger.info(f"Executando pipeline agendado em {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
-            await run_in_threadpool(process_full_pipeline, 10)  # Processa 10 emails por padrão
-            logger.info("Execução do pipeline concluída com sucesso")
+            current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            logger.info(f"Executando pipeline agendado em {current_time}")
+            result = await run_in_threadpool(process_full_pipeline, 10)  # Processa 10 emails por padrão
+            logger.info(f"Execução do pipeline concluída com sucesso. Resultados: {json.dumps(result, ensure_ascii=False)}")
         except Exception as e:
             logger.error(f"Erro na execução agendada do pipeline: {str(e)}")
+            # Log the full traceback for better debugging
+            logger.error(traceback.format_exc())
         
-        # Aguarda 5 minutos antes da próxima execução
+        # Wait for 5 minutes before next execution
         await asyncio.sleep(300)  # 5 minutos = 300 segundos
 
 @app.on_event("startup")
