@@ -178,7 +178,7 @@ class User(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
         json_encoders = {
             datetime: lambda dt: dt.isoformat()
         }
@@ -198,7 +198,7 @@ class Post(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
 
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
         json_encoders = {
             datetime: lambda dt: dt.isoformat()
         }
@@ -1075,14 +1075,19 @@ def _create_posts_from_infos():
                 
                 post_title = chunk.get('subject', '')  # Use chunk subject if available
                 
+                # Trim whitespace from the beginning of chunk content
+                chunk_content = chunk.get('content', '').lstrip() if chunk.get('content') else ''
+                chunk_summary = chunk.get('summary', '').lstrip() if chunk.get('summary') else ''
+                
                 post = Post(
                     infoId=info_id_str,
                     userId=user_id_str,
                     source=source_name,
                     title=post_title if post_title else "Industry Update",
-                    content = f"{chunk.get('summary', '')}: \n\n ´´´{chunk.get('content', '')}´´´" 
-                    if chunk.get('content') else "Industry update",
-                    timestamp=_relative_time(info['created_at'])
+                    content = f"{chunk_summary}: \n\n ´´´{chunk_content}´´´" 
+                    if chunk_content else "Industry update",
+                    timestamp=_relative_time(info['created_at']),
+                    created_at=info['created_at']
                 )
                 
                 # Add created_at from info to prevent duplicate timing issues
@@ -1236,6 +1241,42 @@ def process_full_pipeline(process_emails_count=10):
     return results
 
 
+
+#delete all posts, backup in json before that
+def delete_all_posts():
+    from bson import ObjectId
+    import json
+    
+    # Custom JSON encoder to handle ObjectId and datetime
+    class MongoJSONEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, ObjectId):
+                return str(obj)
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return json.JSONEncoder.default(self, obj)
+    
+    posts_coll = get_mongo_collection("STKFeed", "posts")
+    posts = list(posts_coll.find({}))
+    
+    # Remove _id fields as they will be auto-generated when reinserted
+    posts_without_ids = []
+    for post in posts:
+        if "_id" in post:
+            del post["_id"]  # Remove the _id field
+        posts_without_ids.append(post)
+    
+    # Save posts to JSON file with custom encoder
+    with open("posts.json", "w") as f:
+        json.dump(posts_without_ids, f, cls=MongoJSONEncoder, indent=2)
+    
+    logger.info(f"Backed up {len(posts)} posts to posts.json (without _id fields)")
+    
+    # Delete all posts
+    result = posts_coll.delete_many({})
+    logger.info(f"Deleted {result.deleted_count} posts from STKFeed.posts collection")
+    
+    return result.deleted_count
 
 
 
