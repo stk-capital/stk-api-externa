@@ -288,7 +288,12 @@ def get_unprocessed_emails() -> List[Email]:
     """Retrieve unprocessed emails from MongoDB."""
     collection = get_mongo_collection()
     try:
-        query = {"$or": [{"was_processed": False}, {"was_processed": {"$exists": False}}]}
+        query = {
+            "$and": [
+                {"$or": [{"was_processed": False}, {"was_processed": {"$exists": False}}]},
+                {"$or": [{"relevant": {"$ne": False}}, {"relevant": {"$exists": False}}]}
+            ]
+        }
         cursor = collection.find(query)
         emails = []
         for doc in cursor:
@@ -339,6 +344,8 @@ def filter_emails():
     emails_list = get_unprocessed_emails()
     collection = get_mongo_collection()
     for email_obj in emails_list:
+        #email_obj = list(emails_list)[0]
+        #print(email_obj.get_document_pretty())
         try:
             response = asyncio.run(
                 connect_to_graph_execution(
@@ -360,21 +367,21 @@ def filter_emails():
             logger.error(f"MongoDB update error: {e}")
 
 
-def get_relevant_unprocessed_emails() -> List[Email]:
-    """Retrieve unprocessed emails marked as relevant."""
-    collection = get_mongo_collection()
-    query = {"relevant": True, "was_processed": False}
-    cursor = collection.find(query)
-    emails = []
-    for doc in cursor:
-        if "_id" in doc:
-            doc["_id"] = str(doc["_id"])
-        if "received_at" in doc and isinstance(doc["received_at"], str):
-            doc["received_at"] = datetime.fromisoformat(doc["received_at"])
-        if "attachments" in doc:
-            doc["attachments"] = [Attachment(**att) for att in doc["attachments"]]
-        emails.append(Email(**doc))
-    return emails
+# def get_relevant_unprocessed_emails() -> List[Email]:
+#     """Retrieve unprocessed emails marked as relevant."""
+#     collection = get_mongo_collection()
+#     query = {"relevant": True, "was_processed": False}
+#     cursor = collection.find(query)
+#     emails = []
+#     for doc in cursor:
+#         if "_id" in doc:
+#             doc["_id"] = str(doc["_id"])
+#         if "received_at" in doc and isinstance(doc["received_at"], str):
+#             doc["received_at"] = datetime.fromisoformat(doc["received_at"])
+#         if "attachments" in doc:
+#             doc["attachments"] = [Attachment(**att) for att in doc["attachments"]]
+#         emails.append(Email(**doc))
+#     return emails
 
 
 def extract_json_from_content(content: str) -> str:
@@ -402,7 +409,7 @@ def chunkenize_emails():
     """
     Process relevant unprocessed emails to generate and store chunks.
     """
-    emails_list = get_relevant_unprocessed_emails()
+    emails_list = get_unprocessed_emails()
     emails_collection = get_mongo_collection(collection_name="emails")
     chunks_collection = get_mongo_collection(collection_name="chunks")
 
@@ -412,6 +419,8 @@ def chunkenize_emails():
 
     graph_id = "66e9bc0d68d9def3e3bd49b6"
     for email_obj in emails_list:
+        #email_obj = list(emails_list)[0]
+        #print(email_obj.get_document_pretty())
         try:
             response = asyncio.run(
                 connect_to_graph_execution(
@@ -670,113 +679,113 @@ def _process_chunks():
     query = {"was_processed": False, "include": True}
     cursor = chunks_collection.find(query)
     #grab first doc for debugging, its not a list,s o i cant use cursor[0], but it comes from cursor
-    
-    for doc in cursor:
-        #doc = list(cursor)[0]
-        try:
-            chunk = Chunk(**doc)
-        except Exception as e:
-            logger.error(f"Error parsing chunk: {e}")
-            continue
-
-        # Process companies from chunk.instrument_ids
-        companies_ids = []
-        if chunk.instrument_ids != []:
-            for company in chunk.instrument_ids:
-                try:
-                    company_embedding = get_embedding(company)
-                except Exception as e:
-                    logger.error(f"Error generating embedding for company '{company}': {e}")
-                    continue
-                existing_company = find_similar_company(company_embedding, companies_collection)
-                if existing_company:
-                    companies_ids.append(existing_company.id)
-                else:
-                    # Use ticker-guesser graph to determine company info
-                    candidates = get_candidate_companies(company, companies_collection)
-                    ticker_data = grab_tickers_company(company, candidates)
-                    new_company = Companies(
-                        name=ticker_data.get("name", company),
-                        ticker=ticker_data.get("ticker", ""),
-                        public=ticker_data.get("public", False),
-                        parent_company=ticker_data.get("parent_company", ""),
-                        description=ticker_data.get("description", ""),
-                        sector=ticker_data.get("sector", ""),  # Include sector value from ticker_data
-                        embedding=company_embedding,
-                        created_at=datetime.now(),
-                    )
-                    try:
-                        result = companies_collection.insert_one(new_company.model_dump(by_alias=True))
-                        new_company.id = result.inserted_id if result.inserted_id else new_company.id
-                        companies_ids.append(new_company.id)
-                        logger.info(f"Inserted new company '{company}' with ID: {new_company.id}")
-                    except errors.PyMongoError as e:
-                        logger.error(f"MongoDB error inserting company '{company}': {e}")
-
-        # Process source from chunk.source (assumed to be a single string)
-        sources_ids = []
-        if chunk.source != "":
+    if cursor:
+        for doc in cursor:
+            #doc = list(cursor)[0]
             try:
-                source_embedding = get_embedding(chunk.source)
+                chunk = Chunk(**doc)
             except Exception as e:
-                logger.error(f"Error generating embedding for source '{chunk.source}': {e}")
-                source_embedding = []
-            if source_embedding:
-                existing_source = find_similar_source(source_embedding, sources_collection)
-                if existing_source:
-                    sources_ids.append(existing_source.id)
-                else:
-                    new_source = Source(
-                        name=chunk.source,
-                        embedding=source_embedding,
-                        created_at=datetime.now(),
-                    )
+                logger.error(f"Error parsing chunk: {e}")
+                continue
+
+            # Process companies from chunk.instrument_ids
+            companies_ids = []
+            if chunk.instrument_ids != []:
+                for company in chunk.instrument_ids:
                     try:
-                        result = sources_collection.insert_one(new_source.model_dump(by_alias=True))
-                        new_source.id = result.inserted_id if result.inserted_id else new_source.id
-                        sources_ids.append(new_source.id)
-                        logger.info(f"Inserted new source '{chunk.source}' with ID: {new_source.id}")
-                    except errors.PyMongoError as e:
-                        logger.error(f"MongoDB error inserting source '{chunk.source}': {e}")
+                        company_embedding = get_embedding(company)
+                    except Exception as e:
+                        logger.error(f"Error generating embedding for company '{company}': {e}")
+                        continue
+                    existing_company = find_similar_company(company_embedding, companies_collection)
+                    if existing_company:
+                        companies_ids.append(existing_company.id)
+                    else:
+                        # Use ticker-guesser graph to determine company info
+                        candidates = get_candidate_companies(company, companies_collection)
+                        ticker_data = grab_tickers_company(company, candidates)
+                        new_company = Companies(
+                            name=ticker_data.get("name", company),
+                            ticker=ticker_data.get("ticker", ""),
+                            public=ticker_data.get("public", False),
+                            parent_company=ticker_data.get("parent_company", ""),
+                            description=ticker_data.get("description", ""),
+                            sector=ticker_data.get("sector", ""),  # Include sector value from ticker_data
+                            embedding=company_embedding,
+                            created_at=datetime.now(),
+                        )
+                        try:
+                            result = companies_collection.insert_one(new_company.model_dump(by_alias=True))
+                            new_company.id = result.inserted_id if result.inserted_id else new_company.id
+                            companies_ids.append(new_company.id)
+                            logger.info(f"Inserted new company '{company}' with ID: {new_company.id}")
+                        except errors.PyMongoError as e:
+                            logger.error(f"MongoDB error inserting company '{company}': {e}")
 
-        # Find an existing Info document using vector search with chunk.embedding
-        similar_info = find_similar_info_vector_search(chunk, infos_collection)
-        if similar_info:
-            update_ops = {}
-            if chunk.id not in similar_info.chunk_ids:
-                update_ops.setdefault("$addToSet", {})["chunk_ids"] = chunk.id
-            if companies_ids:
-                update_ops.setdefault("$addToSet", {})["companiesId"] = {"$each": companies_ids}
-            if sources_ids:
-                update_ops.setdefault("$addToSet", {})["sourcesId"] = {"$each": sources_ids}
-            if update_ops:
-                update_ops["$set"] = {"last_updated": datetime.now()}
+            # Process source from chunk.source (assumed to be a single string)
+            sources_ids = []
+            if chunk.source != "":
                 try:
-                    infos_collection.update_one({"_id": similar_info.id}, update_ops)
-                    logger.info(f"Updated info '{similar_info.id}' with chunk '{chunk.id}'")
-                except errors.PyMongoError as e:
-                    logger.error(f"MongoDB error updating info '{similar_info.id}': {e}")
-        else:
-            # Create a new Info document with the current chunk as the head
-            new_info = Info(
-                embedding=chunk.embedding,
-                chunk_ids=[chunk.id],
-                companiesId=companies_ids,
-                sourcesId=sources_ids,
-                created_at=datetime.now(),
-                last_updated=datetime.now(),
-            )
-            try:
-                infos_collection.insert_one(new_info.model_dump(by_alias=True))
-                logger.info(f"Created new info for chunk '{chunk.id}'")
-            except errors.PyMongoError as e:
-                logger.error(f"MongoDB error inserting new info for chunk '{chunk.id}': {e}")
+                    source_embedding = get_embedding(chunk.source)
+                except Exception as e:
+                    logger.error(f"Error generating embedding for source '{chunk.source}': {e}")
+                    source_embedding = []
+                if source_embedding:
+                    existing_source = find_similar_source(source_embedding, sources_collection)
+                    if existing_source:
+                        sources_ids.append(existing_source.id)
+                    else:
+                        new_source = Source(
+                            name=chunk.source,
+                            embedding=source_embedding,
+                            created_at=datetime.now(),
+                        )
+                        try:
+                            result = sources_collection.insert_one(new_source.model_dump(by_alias=True))
+                            new_source.id = result.inserted_id if result.inserted_id else new_source.id
+                            sources_ids.append(new_source.id)
+                            logger.info(f"Inserted new source '{chunk.source}' with ID: {new_source.id}")
+                        except errors.PyMongoError as e:
+                            logger.error(f"MongoDB error inserting source '{chunk.source}': {e}")
 
-        # Mark chunk as processed
-        try:
-            chunks_collection.update_one({"_id": chunk.id}, {"$set": {"was_processed": True}})
-        except errors.PyMongoError as e:
-            logger.error(f"Error marking chunk '{chunk.id}' as processed: {e}")
+            # Find an existing Info document using vector search with chunk.embedding
+            similar_info = find_similar_info_vector_search(chunk, infos_collection)
+            if similar_info:
+                update_ops = {}
+                if chunk.id not in similar_info.chunk_ids:
+                    update_ops.setdefault("$addToSet", {})["chunk_ids"] = chunk.id
+                if companies_ids:
+                    update_ops.setdefault("$addToSet", {})["companiesId"] = {"$each": companies_ids}
+                if sources_ids:
+                    update_ops.setdefault("$addToSet", {})["sourcesId"] = {"$each": sources_ids}
+                if update_ops:
+                    update_ops["$set"] = {"last_updated": datetime.now()}
+                    try:
+                        infos_collection.update_one({"_id": similar_info.id}, update_ops)
+                        logger.info(f"Updated info '{similar_info.id}' with chunk '{chunk.id}'")
+                    except errors.PyMongoError as e:
+                        logger.error(f"MongoDB error updating info '{similar_info.id}': {e}")
+            else:
+                # Create a new Info document with the current chunk as the head
+                new_info = Info(
+                    embedding=chunk.embedding,
+                    chunk_ids=[chunk.id],
+                    companiesId=companies_ids,
+                    sourcesId=sources_ids,
+                    created_at=datetime.now(),
+                    last_updated=datetime.now(),
+                )
+                try:
+                    infos_collection.insert_one(new_info.model_dump(by_alias=True))
+                    logger.info(f"Created new info for chunk '{chunk.id}'")
+                except errors.PyMongoError as e:
+                    logger.error(f"MongoDB error inserting new info for chunk '{chunk.id}': {e}")
+
+            # Mark chunk as processed
+            try:
+                chunks_collection.update_one({"_id": chunk.id}, {"$set": {"was_processed": True}})
+            except errors.PyMongoError as e:
+                logger.error(f"Error marking chunk '{chunk.id}' as processed: {e}")
 
 
 def _log_processing_summary(run_start_time: datetime):
@@ -1053,8 +1062,9 @@ def _create_posts_from_infos():
                     infoId=info_id_str,
                     userId=user_id_str,
                     source=source_name,
-                    title=post_title[:100] if post_title else "Industry Update",
-                    content=chunk['content'][:280] + "..." if chunk.get('content') else "Industry update",
+                    title=post_title if post_title else "Industry Update",
+                    content = f"{chunk.get('summary', '')}: \n\n ´´´{chunk.get('content', '')}´´´" 
+                    if chunk.get('content') else "Industry update",
                     timestamp=_relative_time(info['created_at'])
                 )
                 

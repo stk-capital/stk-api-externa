@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Added environment flag for development mode
+DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "false").lower() == "true"
+
 app = FastAPI()
 
 # api_app = FastAPI()
@@ -338,11 +341,14 @@ async def pipeline_scheduler():
 
 @app.on_event("startup")
 async def startup_event():
-    # Inicia o agendador de grafos
-    asyncio.create_task(start_scheduler())
-    
-    # Inicia o agendador do endpoint de pipeline
-    asyncio.create_task(pipeline_scheduler())
+    # Inicia o agendador de grafos apenas se não estiver em modo de desenvolvimento
+    if not DEVELOPMENT_MODE:
+        logger.info("Starting scheduler - Production mode")
+        asyncio.create_task(start_scheduler())
+        # Inicia o agendador do endpoint de pipeline
+        asyncio.create_task(pipeline_scheduler())
+    else:
+        logger.info("Scheduler disabled - Development mode")
     logger.info("Agendadores iniciados com sucesso")
 
 # email processor process_full_pipeline
