@@ -989,10 +989,13 @@ def send_notification_email(posts_created, destination_email="ruhany.aragao@gmai
 
 def _create_posts_from_infos():
     """Create STKFeed posts for new infos in alphasync_db"""
+    from bson import ObjectId  # Add explicit import for ObjectId
+    
     infos_coll = get_mongo_collection("alphasync_db", "infos")
     posts_coll = get_mongo_collection("STKFeed", "posts")
     users_coll = get_mongo_collection("STKFeed", "users")
     sources_coll = get_mongo_collection("alphasync_db", "sources")
+    chunks_coll = get_mongo_collection("alphasync_db", "chunks")
     
     # Para controle de novos posts criados
     new_posts_created = []
@@ -1004,19 +1007,25 @@ def _create_posts_from_infos():
     except Exception as e:
         logger.error(f"Error creating index: {e}")
     
-    # Process all infos that don't have posts yet
-    for info in infos_coll.find():
+    # Get all existing post infoIds to use in our filter
+    existing_info_ids = set()
+    for post in posts_coll.find({}, {"infoId": 1}):
+        if "infoId" in post:
+            existing_info_ids.add(post["infoId"])
+    
+    # Query to find infos that don't have posts yet and have at least one chunk ID
+    query = {
+        "_id": {"$nin": [ObjectId(id_str) for id_str in existing_info_ids if ObjectId.is_valid(id_str)]},
+        "chunk_ids": {"$exists": True, "$ne": []}
+    }
+    
+    # Process only infos that don't have posts yet
+    for info in infos_coll.find(query):
         try:
-            # Convert ObjectId to string early
+            # Convert ObjectId to string
             info_id_str = str(info['_id'])
             
-            # Check if posts already exist for this info
-            if posts_coll.count_documents({"infoId": info_id_str}) > 0:
-                logger.info(f"Posts already exist for info {info_id_str}")
-                continue
-            
-            # Get first chunk content for post body
-            chunks_coll = get_mongo_collection("alphasync_db", "chunks")
+            # Get first chunk content for post body - fetch in batch first
             if not info.get('chunk_ids') or len(info['chunk_ids']) == 0:
                 logger.warning(f"No chunk IDs found for info {info_id_str}")
                 continue
@@ -1040,8 +1049,16 @@ def _create_posts_from_infos():
             if not company_ids:
                 logger.warning(f"No company IDs found for info {info_id_str}")
                 continue
-                
-            company_users = users_coll.find({"companyId": {"$in": company_ids}})
+            
+            # Find all users for these companies in a single query
+            company_users = list(users_coll.find({"companyId": {"$in": company_ids}}))
+            if not company_users:
+                logger.info(f"No users found for companies in info {info_id_str}")
+                continue
+            
+            # Create a batch of posts to insert
+            posts_to_insert = []
+            post_data_list = []
             
             for user in company_users:
                 user_id_str = str(user['_id'])
@@ -1071,18 +1088,35 @@ def _create_posts_from_infos():
                 # Add created_at from info to prevent duplicate timing issues
                 post.created_at = info['created_at']
                 
+                post_dict = post.model_dump(by_alias=True)
+                posts_to_insert.append(post_dict)
+                post_data_list.append(post_dict.copy())
+            
+            # Bulk insert posts if there are any
+            if posts_to_insert:
                 try:
-                    result = posts_coll.insert_one(post.model_dump(by_alias=True))
-                    logger.info(f"Created post with ID: {result.inserted_id} for info {info_id_str} and user {user_id_str}")
+                    result = posts_coll.insert_many(posts_to_insert, ordered=False)
+                    logger.info(f"Created {len(result.inserted_ids)} posts for info {info_id_str}")
                     
-                    # Adiciona o post à lista de novos posts criados
-                    post_data = post.model_dump(by_alias=True)
-                    post_data['_id'] = str(result.inserted_id)
-                    new_posts_created.append(post_data)
-                except errors.DuplicateKeyError:
-                    logger.warning(f"Duplicate post detected for info {info_id_str} and user {user_id_str}")
+                    # Add IDs to post data and append to new_posts_created
+                    for i, post_id in enumerate(result.inserted_ids):
+                        post_data_list[i]['_id'] = str(post_id)
+                        new_posts_created.append(post_data_list[i])
+                        
+                except errors.BulkWriteError as bwe:
+                    # Handle partial successes
+                    successful_inserts = len(posts_to_insert) - len(bwe.details['writeErrors'])
+                    logger.warning(f"Bulk insert partially successful: {successful_inserts}/{len(posts_to_insert)} posts created")
+                    
+                    # If there were any successful inserts, process them
+                    if 'insertedIds' in bwe.details:
+                        for idx, post_id in bwe.details['insertedIds'].items():
+                            idx = int(idx)  # MongoDB returns indices as strings
+                            post_data_list[idx]['_id'] = str(post_id)
+                            new_posts_created.append(post_data_list[idx])
+                            
                 except Exception as e:
-                    logger.error(f"Error creating post: {e}")
+                    logger.error(f"Error bulk creating posts: {e}")
                 
         except Exception as e:
             logger.error(f"Failed processing info {info.get('_id')}: {e}")
