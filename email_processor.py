@@ -72,12 +72,14 @@ class Chunk(BaseModel):
     instrument_ids: Optional[List[str]] = None
     embedding: List[float]
     include: bool
+    has_events: bool
     document_id: str
     document_collection: str
     index: int  # Index of the chunk in the document
     published_at: datetime = Field(default_factory=datetime.now)
     created_at: datetime = Field(default_factory=datetime.now)
     was_processed: bool = False  # Flag for processing status
+    was_processed_events: bool = False  # Flag for event processing status
 
     @property
     def email_id(self) -> str:
@@ -457,6 +459,7 @@ def chunkenize_emails():
                 instrument_ids=chunk.get("companies", []),
                 embedding=embedding,
                 include=chunk["relevant"],
+                has_events=chunk["has_events"],
                 index=chunk_index,
                 document_id=email_obj.id,
                 document_collection="emails",
