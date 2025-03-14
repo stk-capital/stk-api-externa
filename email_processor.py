@@ -479,8 +479,12 @@ def chunkenize_emails():
             except errors.PyMongoError as e:
                 logger.error(f"Error inserting chunk: {e}")
 
-
-def find_similar_info_vector_search(chunk: Chunk, infos_collection, similarity_threshold: float = 0.9) -> Optional[Info]:
+#test for chunk_id = f11d1270-26be-46e1-9955-43045eb8456a
+#chunks_collection = get_mongo_collection(collection_name="chunks")
+#chunk = chunks_collection.find_one({"_id": "f11d1270-26be-46e1-9955-43045eb8456a"})
+#chunk = Chunk(**chunk)
+#infos_collection = get_mongo_collection(collection_name="infos")
+def find_similar_info_vector_search(chunk: Chunk, infos_collection, similarity_threshold: float = 0.98) -> Optional[Info]:
     results = infos_collection.aggregate([
         {
             "$vectorSearch": {
