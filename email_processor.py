@@ -1226,19 +1226,6 @@ def process_full_pipeline(process_emails_count: int = 10) -> dict:
     print(f"Pipeline completo executado em {duration:.2f} segundos")
     return results
 
-#process full pipeline
-def process_full_pipeline(process_emails_count=10):
-
-
-    _process_emails(process_emails_count)
-    _process_chunks()
-    _create_users_from_companies()
-    _create_posts_from_infos()
-    results = _log_processing_summary(datetime.now() - timedelta(minutes=5))
-
-    #delete all emails created after 2025-03-03
-
-    return results
 
 
 

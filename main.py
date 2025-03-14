@@ -9,7 +9,8 @@ from datetime import datetime
 from scheduler import run_scheduled_graphs, execute_schedule_now, start_scheduler, calculate_next_run
 import asyncio
 from langsmith import trace
-from email_processor import process_full_pipeline
+from email_processor import _process_emails, _process_chunks, _create_users_from_companies, _create_posts_from_infos, _log_processing_summary
+from event_processing import _process_events    
 import logging
 
 
@@ -210,6 +211,21 @@ class Schedule(BaseModel):
         if isinstance(graph_id, ObjectId):
             values['graph_id'] = str(graph_id)
         return values
+
+
+def process_full_pipeline(process_emails_count=10):
+
+
+    _process_emails(process_emails_count)
+    _process_chunks()
+    _create_users_from_companies()
+    _create_posts_from_infos()
+    _process_events()
+    results = _log_processing_summary(datetime.now() - timedelta(minutes=5))
+
+    #delete all emails created after 2025-03-03
+
+    return results
 
 # API routes
 
