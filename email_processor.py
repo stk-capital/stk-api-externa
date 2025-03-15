@@ -596,8 +596,8 @@ def get_candidate_companies(company: str, companies_collection, similarity_thres
                 "index": "vector_index",  # assuming same index
                 "path": "embedding",
                 "queryVector": embedding,
-                "numCandidates": 10,
-                "limit": 10,
+                "numCandidates": 3,
+                "limit": 3,
             }
         },
         {
@@ -613,6 +613,7 @@ def get_candidate_companies(company: str, companies_collection, similarity_thres
         if score > similarity_threshold:
             doc = result["document"]
             candidate = {
+                "id": doc.get("_id", ""),
                 "name": doc.get("name", ""),
                 "ticker": doc.get("ticker", ""),
                 "public": doc.get("public", False),
@@ -668,6 +669,80 @@ def parse_companies(content: str) -> List[Dict[str, Any]]:
         return []
 
 
+#test for intruments_to_companies_ids
+#instruments = ["Bradesco Banco Brasileiro S.A.", "XP Inc."]
+#companies_collection = get_mongo_collection(collection_name="companies")
+#companies_ids = intruments_to_companies_ids(instruments, companies_collection)
+#print(companies_ids)
+
+#test for intruments_to_companies_ids
+#instruments = ["Bradesco Banco Brasileiro S.A.", "XP Inc.","XP Inc. is a leading technology investment platform in Brazil.","Fortinet"]
+#companies_collection = get_mongo_collection(collection_name="companies")
+#companies_ids = intruments_to_companies_ids(instruments, companies_collection)
+#print(companies_ids)
+
+
+def intruments_to_companies_ids(instruments: List[str], companies_collection) -> List[str]:
+    """
+    Convert a list of instrument names to a list of company IDs.
+    """
+    #instruments = ["Bradesco Banco Brasileiro S.A.", "XP Inc."]
+    #companies_collection = get_mongo_collection(collection_name="companies")
+    companies_ids = []
+        
+    if instruments != []:
+        
+        for company in instruments:
+            #company =instruments[1]
+            
+            try:
+                company_embedding = get_embedding(company)
+            except Exception as e:
+                logger.error(f"Error generating embedding for company '{company}': {e}")
+                continue
+            existing_company = find_similar_company(company_embedding, companies_collection)
+            if existing_company:
+                companies_ids.append(existing_company.id)
+            else:
+                # Use ticker-guesser graph to determine company info
+                candidates = get_candidate_companies(company, companies_collection)
+                
+                ticker_data = grab_tickers_company(company, candidates)
+                
+                new_company = Companies(
+                    name=ticker_data.get("name", company),
+                    ticker=ticker_data.get("ticker", ""),
+                    public=ticker_data.get("public", False),
+                    parent_company=ticker_data.get("parent_company", ""),
+                    description=ticker_data.get("description", ""),
+                    sector=ticker_data.get("sector", ""),  # Include sector value from ticker_data
+                    embedding=company_embedding,
+                    created_at=datetime.now(),
+                )
+                
+                try:
+                    if ticker_data.get("already_exists", False):
+                        new_company.id = ticker_data.get("id", "")
+                        result = companies_collection.update_one(
+                            {"id": ticker_data.get("id", "")},
+                            {"$set": new_company.model_dump(by_alias=True)}
+                        )
+                        logger.info(f"Updated existing company '{company}' with ID: {new_company.id}")
+                    else:
+                        result = companies_collection.insert_one(new_company.model_dump(by_alias=True))
+                        new_company.id = result.inserted_id if result.inserted_id else new_company.id
+                        logger.info(f"Inserted new company '{company}' with ID: {new_company.id}")
+                    
+                    companies_ids.append(new_company.id)
+                    
+                except errors.PyMongoError as e:
+                    logger.error(f"MongoDB error inserting company '{company}': {e}")
+    return companies_ids
+
+#garb company of id e40a7e09-cc20-441a-9b65-0b58f978e288
+#import ObjectId
+
+
 def _process_chunks():
     """
     Process new chunks by:
@@ -696,38 +771,8 @@ def _process_chunks():
                 continue
 
             # Process companies from chunk.instrument_ids
-            companies_ids = []
-            if chunk.instrument_ids != []:
-                for company in chunk.instrument_ids:
-                    try:
-                        company_embedding = get_embedding(company)
-                    except Exception as e:
-                        logger.error(f"Error generating embedding for company '{company}': {e}")
-                        continue
-                    existing_company = find_similar_company(company_embedding, companies_collection)
-                    if existing_company:
-                        companies_ids.append(existing_company.id)
-                    else:
-                        # Use ticker-guesser graph to determine company info
-                        candidates = get_candidate_companies(company, companies_collection)
-                        ticker_data = grab_tickers_company(company, candidates)
-                        new_company = Companies(
-                            name=ticker_data.get("name", company),
-                            ticker=ticker_data.get("ticker", ""),
-                            public=ticker_data.get("public", False),
-                            parent_company=ticker_data.get("parent_company", ""),
-                            description=ticker_data.get("description", ""),
-                            sector=ticker_data.get("sector", ""),  # Include sector value from ticker_data
-                            embedding=company_embedding,
-                            created_at=datetime.now(),
-                        )
-                        try:
-                            result = companies_collection.insert_one(new_company.model_dump(by_alias=True))
-                            new_company.id = result.inserted_id if result.inserted_id else new_company.id
-                            companies_ids.append(new_company.id)
-                            logger.info(f"Inserted new company '{company}' with ID: {new_company.id}")
-                        except errors.PyMongoError as e:
-                            logger.error(f"MongoDB error inserting company '{company}': {e}")
+            companies_ids = intruments_to_companies_ids(chunk.instrument_ids, companies_collection)
+            logger.info(f"Companies IDs: {companies_ids}")
 
             # Process source from chunk.source (assumed to be a single string)
             sources_ids = []

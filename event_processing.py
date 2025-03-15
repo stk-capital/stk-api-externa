@@ -16,7 +16,7 @@ from email_processor import logger
 from email_processor import get_embedding
 from email_processor import connect_to_graph_execution
 from email_processor import extract_json_from_content
-
+from email_processor import intruments_to_companies_ids
 from email_processor import get_mongo_collection
 from email_processor import uuid_str
 from pydantic import BaseModel, Field
@@ -588,7 +588,8 @@ def _process_events():
     # Query chunks with events that haven't been processed for event extraction
     #query = {"has_events": True, "was_processed_events": False}
     #also inclurde chubks with no was_processed_events
-    query = {"has_events": True, "was_processed_events": {"$exists": False}}
+    #query = {"has_events": True, "was_processed_events": {"$exists": False}}
+    query = {"has_events": True}
     
     # Count total chunks to process for progress reporting
     total_chunks = chunks_collection.count_documents(query)
@@ -609,7 +610,7 @@ def _process_events():
     }
     
     for chunk_doc in chunks_collection.find(query):
-        #chunk_doc = list(chunks_collection.find(query))[0]
+        #chunk_doc = list(chunks_collection.find(query))[-1]
         chunk_start_time = datetime.now()
         chunk_id = chunk_doc.get("_id", "unknown")
         
@@ -687,15 +688,16 @@ def _process_events():
                     # Create new event
                     creation_start = datetime.now()
                     normalized_date = normalize_date(event_data["date"], chunk.published_at)
-                    
+                    companies_collection = get_mongo_collection(collection_name="companies")
+                    companies_ids = intruments_to_companies_ids(event_data.get("companies", []), companies_collection)
                     new_event = Event(
                         name=event_data["name"],
                         description=event_data["description"],
                         date=normalized_date,
-                        original_date_text=event_data["original_date_text"],
+                        original_date_text=event_data["original_date_text"] or "",
                         location=event_data.get("location"),
                         event_type=event_data["event_type"],
-                        companies_ids=chunk.instrument_ids or [],
+                        companies_ids=companies_ids or [],
                         chunk_ids=[chunk.id],
                         source=chunk.source,
                         confirmed=event_data["confirmed"],
