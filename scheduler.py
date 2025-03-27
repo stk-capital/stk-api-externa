@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
-from graph_executor import execute_graph
+from services.langchain_services import execute_graph
 import pymongo
 import logging
 from bson import ObjectId  # Add this import
@@ -16,9 +16,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def run_scheduled_graphs():
-    client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
+    # Use the utility module for database connections
+    from util.mongodb_utils import get_async_database
+    db = get_async_database("crewai_db")
+    
+    # Old connection method:
+    # client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
+    # db = client.crewai_db
     #client = pymongo.MongoClient(os.getenv("MONGO_DB_URL"))
-    db = client.crewai_db
 
     while True:
         now = datetime.utcnow()
@@ -100,8 +105,13 @@ def calculate_next_run(frequency: str, date: str, time_str: str) -> datetime:
     return schedule_time
 
 async def execute_schedule_now(schedule_id: str):
-    client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
-    db = client.crewai_db
+    # Use the utility module for database connections
+    from util.mongodb_utils import get_async_database
+    db = get_async_database("crewai_db")
+    
+    # Old connection method:
+    # client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
+    # db = client.crewai_db
 
     schedule = await db.schedules.find_one({"_id": ObjectId(schedule_id)})
     if not schedule:

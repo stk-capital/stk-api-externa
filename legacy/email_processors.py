@@ -18,13 +18,21 @@ from datetime import datetime, timedelta
 # Environment variables are assumed to be defined in functions.env
 import env
 
+from util.mongodb_utils import get_mongo_collection
+
+if env.USE_DEV_MONGO_DB:
+    db_name_alphasync = "alphasync_db_dev"
+    db_name_stkfeed = "STKFeed_dev"
+else:
+    db_name_alphasync = "alphasync_db"
+    db_name_stkfeed = "STKFeed"
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Added imports for email sending
-import random
-import traceback
+
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -197,6 +205,7 @@ class Post(BaseModel):
     likes: int = 0
     dislikes: int = 0
     shares: int = 0
+    embedding: List[float]
     created_at: datetime = Field(default_factory=datetime.now)
 
     class Config:
@@ -209,12 +218,18 @@ class Post(BaseModel):
 # -------------------------------
 # Database & Email Functions
 # -------------------------------
-def get_mongo_collection(db_name: str = "alphasync_db", collection_name: str = "emails"):
-    """Establish a connection to the MongoDB collection."""
-    mongo_uri = env.MONGO_DB_URL
-    client = MongoClient(mongo_uri)
-    db = client[db_name]
-    return db[collection_name]
+# def get_mongo_collection(db_name: str = "alphasync_db", collection_name: str = "emails"):
+#     """Establish a connection to the MongoDB collection."""
+#     # Import the utility module for database connections
+#     # This uses the new MongoDB utility function that supports dev databases
+#     from util.mongodb_utils import get_mongo_collection as get_collection
+#     return get_collection(collection_name, db_name)
+    
+    # Old implementation:
+    # mongo_uri = env.MONGO_DB_URL
+    # client = MongoClient(mongo_uri)
+    # db = client[db_name]
+    # return db[collection_name]
 
 
 def get_last_n_emails(n: int = 10) -> List[Email]:
@@ -224,7 +239,7 @@ def get_last_n_emails(n: int = 10) -> List[Email]:
     try:
         from outlook_email import get_recent_emails
         emails_data = get_recent_emails(top_n=n)
-        collection = get_mongo_collection()
+        collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="emails")
         email_objects = []
 
         for email_data in emails_data:
@@ -245,6 +260,7 @@ def get_last_n_emails(n: int = 10) -> List[Email]:
                     logger.error(f"Failed to insert email into MongoDB: {e}")
             else:
                 logger.info(f"Email with Message-ID: {email_obj.id} already exists")
+                
         return email_objects
     except Exception as e:
         logger.error(f"Failed to retrieve emails: {e}")
@@ -288,7 +304,7 @@ async def connect_to_graph_execution(
 
 def get_unprocessed_emails() -> List[Email]:
     """Retrieve unprocessed emails from MongoDB."""
-    collection = get_mongo_collection()
+    collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="emails")
     try:
         query = {
             "$and": [
@@ -344,7 +360,7 @@ def filter_emails():
     then update the email document in MongoDB.
     """
     emails_list = get_unprocessed_emails()
-    collection = get_mongo_collection()
+    collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="emails")
     for email_obj in emails_list:
         #email_obj = list(emails_list)[0]
         #print(email_obj.get_document_pretty())
@@ -412,8 +428,8 @@ def chunkenize_emails():
     Process relevant unprocessed emails to generate and store chunks.
     """
     emails_list = get_unprocessed_emails()
-    emails_collection = get_mongo_collection(collection_name="emails")
-    chunks_collection = get_mongo_collection(collection_name="chunks")
+    emails_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="emails")
+    chunks_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
 
     # Delete existing chunks for these emails
     for email_obj in emails_list:
@@ -752,10 +768,10 @@ def _process_chunks():
          or creating a new Info if none exists.
       3. Marking the chunk as processed.
     """
-    infos_collection = get_mongo_collection(collection_name="infos")
-    chunks_collection = get_mongo_collection(collection_name="chunks")
-    companies_collection = get_mongo_collection(collection_name="companies")
-    sources_collection = get_mongo_collection(collection_name="sources")
+    infos_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="infos")
+    chunks_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
+    companies_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="companies")
+    sources_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="sources")
 
     # Modified query to process only chunks marked as relevant (include=True)
     query = {"was_processed": False, "include": True}
@@ -844,13 +860,13 @@ def _log_processing_summary(run_start_time: datetime):
     """
     Enhanced logging to include STKFeed metrics
     """
-    emails_collection = get_mongo_collection("alphasync_db", "emails")
-    chunks_collection = get_mongo_collection("alphasync_db", "chunks")
-    companies_collection = get_mongo_collection("alphasync_db", "companies")
-    sources_collection = get_mongo_collection("alphasync_db", "sources")
-    infos_collection = get_mongo_collection("alphasync_db", "infos")
-    users_collection = get_mongo_collection("STKFeed", "users")
-    posts_collection = get_mongo_collection("STKFeed", "posts")
+    emails_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="emails")
+    chunks_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
+    companies_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="companies")
+    sources_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="sources")
+    infos_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="infos")
+    users_collection = get_mongo_collection(db_name=db_name_stkfeed, collection_name="users")
+    posts_collection = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
 
     # Existing counts
     num_important_chunks = chunks_collection.count_documents({
@@ -908,13 +924,13 @@ def _process_feed():
 
 def _create_users_from_companies():
     """Create STKFeed users for new companies in alphasync_db"""
-    companies_coll = get_mongo_collection("alphasync_db", "companies")
-    users_coll = get_mongo_collection("STKFeed", "users")
+    companies_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="companies")
+    users_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="users")
     
     # Find companies without existing users
     pipeline = [
         {"$lookup": {
-            "from": "STKFeed.users",
+            "from": f"{db_name_stkfeed}.users",
             "localField": "_id",
             "foreignField": "companyId",
             "as": "existing_users"
@@ -1043,11 +1059,11 @@ def _create_posts_from_infos():
     """Create STKFeed posts for new infos in alphasync_db"""
     from bson import ObjectId  # Add explicit import for ObjectId
     
-    infos_coll = get_mongo_collection("alphasync_db", "infos")
-    posts_coll = get_mongo_collection("STKFeed", "posts")
-    users_coll = get_mongo_collection("STKFeed", "users")
-    sources_coll = get_mongo_collection("alphasync_db", "sources")
-    chunks_coll = get_mongo_collection("alphasync_db", "chunks")
+    infos_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="infos")
+    posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
+    users_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="users")
+    sources_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="sources")
+    chunks_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
     
     # Para controle de novos posts criados
     new_posts_created = []
@@ -1136,6 +1152,7 @@ def _create_posts_from_infos():
                     userId=user_id_str,
                     source=source_name,
                     title=post_title if post_title else "Industry Update",
+                    embedding=get_embedding(chunk_summary),
                     content = f"{chunk_summary}: \n\n ´´´{chunk_content}´´´" 
                     if chunk_content else "Industry update",
                     timestamp=_relative_time(info['created_at']),
@@ -1216,8 +1233,8 @@ def delete_documents_after_date():
     cutoff_date = datetime(2025, 2, 28, 23, 59, 59)
     
     # Get the collections
-    emails_coll = get_mongo_collection("alphasync_db", "emails")
-    chunks_coll = get_mongo_collection("alphasync_db", "chunks")
+    emails_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="emails")
+    chunks_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
     
     # Delete emails created after the cutoff date
     email_result = emails_coll.delete_many({"created_at": {"$gt": cutoff_date}})
@@ -1295,7 +1312,7 @@ def delete_all_posts():
                 return obj.isoformat()
             return json.JSONEncoder.default(self, obj)
     
-    posts_coll = get_mongo_collection("STKFeed", "posts")
+    posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
     posts = list(posts_coll.find({}))
     
     # Remove _id fields as they will be auto-generated when reinserted

@@ -9,3 +9,11 @@ OUTLOOK_AUTHORITY = os.getenv("OUTLOOK_AUTHORITY")
 OUTLOOK_SCOPE = os.getenv("OUTLOOK_SCOPE")
 USER_EMAIL = os.getenv("USER_EMAIL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+USE_DEV_MONGO_DB = os.getenv("USE_DEV_MONGO_DB")
+
+if USE_DEV_MONGO_DB:
+    db_name_alphasync = "alphasync_db_dev"
+    db_name_stkfeed = "STKFeed_dev"
+else:
+    db_name_alphasync = "alphasync_db"
+    db_name_stkfeed = "STKFeed"

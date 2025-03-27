@@ -26,9 +26,15 @@ from langchain_nvidia_ai_endpoints import ChatNVIDIA
 # Configuring
 dotenv.load_dotenv()
 logger = logging.getLogger(__name__)
-client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
+
+# Use the utility module for database connections
+from util.mongodb_utils import get_async_database
+db = get_async_database("crewai_db")
+
+# Old connection method:
+# client = AsyncIOMotorClient(os.getenv("MONGO_DB_URL"))
+# db = client.crewai_db
 ##client= pymongo.MongoClient(os.getenv("MONGO_DB_URL"))
-db = client.crewai_db
 
 # Global variables
 list_system_default_variables = ['type', 'content', 'source', 'route', 'id', 'content_type', 'name']

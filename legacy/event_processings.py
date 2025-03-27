@@ -17,12 +17,22 @@ from email_processor import get_embedding
 from email_processor import connect_to_graph_execution
 from email_processor import extract_json_from_content
 from email_processor import intruments_to_companies_ids
-from email_processor import get_mongo_collection
+ 
 from email_processor import uuid_str
 from pydantic import BaseModel, Field
 import uuid
 import re   
 import traceback
+import env
+from util.mongodb_utils import get_mongo_collection
+
+if env.USE_DEV_MONGO_DB:
+    db_name_alphasync = "alphasync_db_dev"
+    db_name_stkfeed = "STKFeed_dev"
+else:
+    db_name_alphasync = "alphasync_db"
+    db_name_stkfeed = "STKFeed"
+
 
 class Event(BaseModel):
     id: str = Field(default_factory=uuid_str, alias="_id")
@@ -583,8 +593,8 @@ def _process_events():
     logger.info("Starting event processing pipeline...")
     start_time = datetime.now()
     
-    events_collection = get_mongo_collection(collection_name="events")
-    chunks_collection = get_mongo_collection(collection_name="chunks")
+    events_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="events")
+    chunks_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
     # Query chunks with events that haven't been processed for event extraction
     #query = {"has_events": True, "was_processed_events": False}
     #also inclurde chubks with no was_processed_events
@@ -688,7 +698,7 @@ def _process_events():
                     # Create new event
                     creation_start = datetime.now()
                     normalized_date = normalize_date(event_data["date"], chunk.published_at)
-                    companies_collection = get_mongo_collection(collection_name="companies")
+                    companies_collection = get_mongo_collection(db_name=db_name_alphasync, collection_name="companies")
                     companies_ids = intruments_to_companies_ids(event_data.get("companies", []), companies_collection)
                     new_event = Event(
                         name=event_data["name"],
