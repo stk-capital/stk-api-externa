@@ -4,8 +4,8 @@ import traceback
 from datetime import datetime
 import json
 
-from services.posts_services import clustering_posts
-from services.clusters_services import process_clusters
+# from services.posts_services import clustering_posts
+from services.clusters_services import process_clusters, clustering_posts
 from services.trends_services import update_trends
 from fastapi.concurrency import run_in_threadpool
 
