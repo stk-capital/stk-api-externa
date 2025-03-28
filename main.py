@@ -14,7 +14,9 @@ from services.chunks_services import _process_chunks
 from services.users_services import _process_users
 from services.posts_services import _process_posts
 from services.events_services import _process_events
+from services.trends_services import update_trends
 from datetime import timedelta
+from services.clustering_scheduler import cluster_pipeline_scheduler, run_clustering_pipeline
 
 import logging
 import os
@@ -79,7 +81,11 @@ def process_full_pipeline(process_emails_count=10):
     _process_chunks()
     _process_users()
     _process_posts()
-    _process_events()
+    # _process_events()
+    
+    # Notar que clustering_posts, process_clusters e update_trends
+    # agora são executados no pipeline de clustering separado
+    
     results = _log_processing_summary(datetime.now() - timedelta(minutes=5))
 
     #delete all emails created after 2025-03-03
@@ -147,6 +153,8 @@ async def startup_event():
         asyncio.create_task(start_scheduler())
         # Inicia o agendador do endpoint de pipeline
         asyncio.create_task(pipeline_scheduler())
+        # Inicia o agendador do pipeline de clustering (executa a cada hora)
+        asyncio.create_task(cluster_pipeline_scheduler())
     else:
         logger.info("Scheduler disabled - Development mode")
     logger.info("Agendadores iniciados com sucesso")
@@ -164,6 +172,33 @@ async def run_pipeline(process_emails_count: int = 10):
     except Exception as e:
         logger.error(f"Pipeline execution error: {e}")
         raise HTTPException(status_code=500, detail="Error executing pipeline")
+
+@app.post("/api/trends/update")
+async def update_trends_endpoint():
+    """
+    Atualiza a coleção de trends a partir dos clusters processados.
+    """
+    try:
+        result = await run_in_threadpool(update_trends)
+        return result
+    except Exception as e:
+        logger.error(f"Trends update error: {e}")
+        raise HTTPException(status_code=500, detail="Error updating trends")
+
+@app.post("/api/clustering/run")
+async def run_clustering_endpoint():
+    """
+    Executa o pipeline completo de clustering sob demanda:
+    1. Clustering de posts
+    2. Processamento de clusters
+    3. Atualização de trends
+    """
+    try:
+        result = await run_clustering_pipeline()
+        return result
+    except Exception as e:
+        logger.error(f"Clustering pipeline error: {e}")
+        raise HTTPException(status_code=500, detail="Error executing clustering pipeline")
 
 if __name__ == "__main__":
 

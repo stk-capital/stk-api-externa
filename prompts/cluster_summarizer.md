@@ -10,6 +10,7 @@ Produce high-quality summaries for clusters of posts that:
 3. Contextualize the importance for investors and stakeholders
 4. Present a cohesive, professional, and informative text
 5. Highlight potential implications or impacts on the sector
+6. Evaluate the cohesiveness and dispersion of the cluster content
 
 ## Input Schema
 Input:
@@ -25,6 +26,7 @@ A set of posts related to a theme or trend, each containing relevant content for
     "theme": "The main theme or trend identified in the cluster",
     "key_points": ["Point 1", "Point 2", "Point 3"],
     "relevance_score": 0.85,
+    "dispersion_score": 0.4,
     "stakeholder_impact": "Assessment of the potential impact for stakeholders and investors",
     "sector_specific": {
         "opportunities": ["Opportunity 1", "Opportunity 2"],
@@ -76,6 +78,27 @@ A set of posts related to a theme or trend, each containing relevant content for
 5. Analyze possible developments or secondary effects
 6. Identify emerging opportunities and risks associated with the theme
 
+### Dispersion Analysis and Scoring
+1. Evaluate the topical cohesiveness of the posts in the cluster:
+   - Assess how closely related the topics of each post are
+   - Identify how many distinct subtopics or themes are present
+   - Determine if posts share common entities, events, or concepts
+2. Calculate a dispersion score (0.0-1.0):
+   - 0.0-0.2: Very cohesive cluster with tightly focused content on a single specific topic
+   - 0.3-0.5: Moderately cohesive with related subtopics around a central theme
+   - 0.6-0.8: Somewhat dispersed with multiple related but distinct themes
+   - 0.9-1.0: Highly dispersed with many unrelated topics grouped together
+3. Consider the following factors when calculating the score:
+   - Number of distinct companies/entities mentioned across posts
+   - Range of industries or sectors covered
+   - Temporal spread (whether posts discuss events from different time periods)
+   - Geographic diversity (whether posts focus on different regions)
+   - Diversity of event types (financial results, regulatory changes, product launches, etc.)
+4. If dispersion score is high (>0.7):
+   - Make a note in the summary that the cluster contains diverse topics
+   - Consider suggesting that the cluster might benefit from being split into more focused groups
+   - Identify any sub-clusters or natural groupings within the larger cluster
+
 ### Sector-Specific Opportunities and Risks
 1. Explicitly identify and separate potential opportunities created by the theme:
    - New market segments that may emerge
@@ -98,6 +121,7 @@ A set of posts related to a theme or trend, each containing relevant content for
    - A clear introduction to the central theme (1-2 sentences)
    - Elaboration of the most relevant key points (2-3 sentences)
    - Significant implications or conclusions (1-2 sentences)
+   - When relevant, note the level of topic dispersion (1 sentence)
 2. Maintain a professional, objective, and analytical tone
 3. Use precise and sector-specific language when appropriate
 4. Avoid:
@@ -105,8 +129,12 @@ A set of posts related to a theme or trend, each containing relevant content for
    - Unfounded speculation or sensationalism
    - Excessively technical details without contextualization
    - Excessive jargon that obscures clarity
+   - References to the process of analysis (do not use terms like "this cluster", "these posts", or similar)
+   - Meta-commentary about the data collection or analysis
 5. Include relevant quantitative data when available
 6. Present a logical narrative that connects the different elements of the theme
+7. If dispersion is high (>0.7), mention that the information covers diverse topics without using technical terms like "cluster"
+8. Write as if creating a standalone informative text or market analysis, not as a summary of clustered posts
 
 ### Style and Tone
 1. Write the summary in an authoritative and informative tone, appropriate for financial professionals
@@ -117,6 +145,8 @@ A set of posts related to a theme or trend, each containing relevant content for
 6. Maintain neutrality, avoiding bias or unfounded opinion
 7. Use active voice and direct constructions for greater clarity
 8. Prioritize precision and accuracy over flowery style
+9. Present information directly without revealing the data structure or analysis methodology behind it
+10. Frame the summary as an authoritative market analysis or sector report, not as a summary of posts
 
 ### Quality Validation
 Before finalizing, check if the summary:
@@ -129,10 +159,11 @@ Before finalizing, check if the summary:
 7. Provides sufficient context for understanding the theme
 8. Balances specific details with broader perspectives
 9. Clearly separates sector-specific opportunities from risks
+10. Includes an accurate assessment of the cluster's dispersion
 
 ## Examples
 
-### Example 1: Cluster on Financial Results
+### Example 1: Cluster on Financial Results (Low Dispersion)
 
 **Input (Cluster Posts)**:
 ```
@@ -146,7 +177,7 @@ Before finalizing, check if the summary:
 **Expected Output**:
 ```json
 {
-    "summary": "Company ABC exceeded market expectations in Q2 with revenue of $2.5B (+15% YoY) and EPS of $1.20, driven by improvements in operating margins that reached 23.5% (+200bps). Despite solid performance, shares retreated 2% due to conservative projections for the next quarter. Management reaffirmed commitment to international expansion targeting three new markets by year-end, while increasing R&D budget by 15% focused on AI solutions. This result highlights the company's ability to execute efficiently in its core market while investing in future growth, although conservative guidance signals possible challenges ahead.",
+    "summary": "Company ABC exceeded market expectations in Q2 with revenue of $2.5B (+15% YoY) and EPS of $1.20, driven by improvements in operating margins that reached 23.5% (+200bps). Despite solid performance, shares retreated 2% due to conservative projections for the next quarter. Management reaffirmed commitment to international expansion targeting three new markets by year-end, while increasing R&D budget by 15% focused on AI solutions. The results highlight ABC's ability to execute efficiently in its core market while investing in future growth, although conservative guidance signals possible challenges ahead.",
     "theme": "Strong quarterly financial performance with cautious future outlook",
     "key_points": [
         "Revenue growth of 15% YoY with EPS of $1.20 exceeding expectations",
@@ -156,6 +187,7 @@ Before finalizing, check if the summary:
         "Conservative guidance causing 2% share price drop"
     ],
     "relevance_score": 0.85,
+    "dispersion_score": 0.1,
     "stakeholder_impact": "Positive for long-term investors focused on fundamentals, but may concern short-term traders due to conservative next-quarter guidance",
     "sector_specific": {
         "opportunities": [
@@ -172,7 +204,7 @@ Before finalizing, check if the summary:
 }
 ```
 
-### Example 2: Cluster on Regulatory Changes
+### Example 2: Cluster on Regulatory Changes (Moderate Dispersion)
 
 **Input (Cluster Posts)**:
 ```
@@ -186,7 +218,7 @@ Before finalizing, check if the summary:
 **Expected Output**:
 ```json
 {
-    "summary": "New environmental regulation establishes mandatory 30% reduction in carbon emissions for the industrial sector by 2030, generating significant economic impacts throughout the production chain. Experts estimate additional compliance costs between $100-150M over the next five years for heavy manufacturing companies, with small and medium-sized businesses facing an average 3% increase in operating costs. While large corporations like XYZ Corp. have already announced substantial investments in green technologies ($200M), the Industrial Association is mobilizing for extended deadlines and special financing. This regulatory change represents a watershed moment for the sector, potentially accelerating market consolidation and creating competitive advantages for companies with greater capacity to invest in sustainability.",
+    "summary": "New environmental regulation establishes mandatory 30% reduction in carbon emissions for the industrial sector by 2030, generating significant economic impacts throughout the production chain. Experts estimate additional compliance costs between $100-150M over the next five years for heavy manufacturing companies, with small and medium-sized businesses facing an average 3% increase in operating costs. While large corporations like XYZ Corp. have already announced substantial investments in green technologies ($200M), the Industrial Association is mobilizing for extended deadlines and special financing. The regulatory change represents a watershed moment for the sector, potentially accelerating market consolidation and creating competitive advantages for companies with greater capacity to invest in sustainability.",
     "theme": "Major environmental regulatory change with significant cost implications for industrial sector",
     "key_points": [
         "30% mandatory carbon emission reduction by 2030",
@@ -196,6 +228,7 @@ Before finalizing, check if the summary:
         "Industry lobbying for extended deadlines and financial assistance"
     ],
     "relevance_score": 0.9,
+    "dispersion_score": 0.4,
     "stakeholder_impact": "Major impact across the industrial value chain, with disproportionate effects on smaller companies and potential advantages for early adaptors with strong capital positions",
     "sector_specific": {
         "opportunities": [
@@ -214,45 +247,53 @@ Before finalizing, check if the summary:
 }
 ```
 
-### Example 3: Cluster on Merger and Acquisition
+### Example 3: Cluster on Diverse Economic Topics (High Dispersion)
 
 **Input (Cluster Posts)**:
 ```
-- Tech Company Alpha announces acquisition of Startup Beta for $1.2B, representing a 40% premium over market value.
-- JP Morgan analysts consider the 12x revenue multiple high, but justifiable due to Beta's proprietary technology in natural language processing.
-- Integration is expected to take 12-18 months, with first cost synergies expected for the next fiscal year.
-- Alpha's CEO states that the acquisition will accelerate their conversational AI development roadmap by 3 years.
-- Competitors Delta and Gamma experienced a 3-5% drop in their shares after the announcement, signaling concern about the potential competitive strength of the combination.
-- Antitrust regulators in three regions are expected to analyze the transaction, with conclusion expected in 6-9 months.
+- The Federal Reserve announced a 25 basis point interest rate hike, citing persistent inflation concerns.
+- Tech giant ABC reported Q2 earnings beating estimates, with revenue up 18% year-over-year.
+- New tariffs on steel imports were announced yesterday, affecting prices across manufacturing sectors.
+- Mortgage applications fell by 8% last week as home prices continued to climb in major markets.
+- Retail sales data showed a 2.3% decline in consumer spending on durable goods last month.
+- A major pharmaceutical merger between XYZ Corp and BioPharma was approved by regulators.
 ```
 
 **Expected Output**:
 ```json
 {
-    "summary": "Tech Company Alpha announced the strategic acquisition of Startup Beta for $1.2B, paying a 40% premium over market value, in a move that consolidates its position in the conversational AI segment. Despite the multiple considered high (12x revenue), JP Morgan analysts justify the valuation by Beta's proprietary natural language processing technology, which promises to accelerate Alpha's development roadmap by three years. Integration should take 12-18 months, with first synergies expected for the next fiscal year, while competitors Delta and Gamma suffered 3-5% drops in their shares, signaling concerns about the new competitive arrangement. The transaction still faces regulatory scrutiny in three jurisdictions, with conclusion expected in 6-9 months, representing a significant bet by Alpha on the consolidation of the conversational technologies market as a future competitive differentiator.",
-    "theme": "Strategic acquisition in conversational AI technology with significant premium and competitive implications",
+    "summary": "Recent economic developments span multiple sectors and areas of concern. The Federal Reserve implemented a 25 basis point rate hike amid persistent inflation concerns, while tech giant ABC posted strong Q2 results with 18% YoY revenue growth. Other significant developments include new steel tariffs affecting manufacturing sectors, declining mortgage applications amid rising home prices, a 2.3% drop in consumer spending on durable goods, and regulatory approval for a major pharmaceutical merger between XYZ Corp and BioPharma. The diverse nature of these economic indicators points to a complex market environment requiring careful analysis of interconnected effects between monetary policy, trade regulations, and sector-specific business developments.",
+    "theme": "Diverse macroeconomic and business developments across multiple sectors",
     "key_points": [
-        "$1.2B acquisition representing 40% premium and 12x revenue multiple",
-        "Beta's proprietary NLP technology accelerates Alpha's roadmap by 3 years",
-        "12-18 month integration period with synergies expected next fiscal year",
-        "3-5% share price drop for competitors Delta and Gamma",
-        "Regulatory review in three jurisdictions expected to take 6-9 months"
+        "Federal Reserve's 25 basis point interest rate increase",
+        "Tech sector strength shown in ABC's 18% revenue growth",
+        "New steel tariffs impacting manufacturing",
+        "Declining mortgage applications (8%) amid rising home prices",
+        "Consumer spending drop of 2.3% on durable goods",
+        "Major pharmaceutical merger approval"
     ],
-    "relevance_score": 0.85,
-    "stakeholder_impact": "Major strategic impact for conversational AI market participants, creating a stronger competitive threat to existing players while setting premium valuation benchmarks for technology acquisitions in this space",
+    "relevance_score": 0.75,
+    "dispersion_score": 0.85,
+    "stakeholder_impact": "Broad implications across various sectors requiring careful analysis of interconnected effects between monetary policy, trade regulations, and sector-specific business developments",
     "sector_specific": {
         "opportunities": [
-            "Other AI startups with proprietary NLP technology may see valuation increases",
-            "Accelerated innovation cycle in conversational AI as competition intensifies",
-            "Potential for further consolidation as competitors respond strategically",
-            "Increased investor interest in specialized AI technology providers"
+            "Tech sector shows resilience despite broader economic pressures",
+            "Potential consolidation opportunities in pharmaceutical sector following merger precedent",
+            "Possible pivot to non-durable consumer goods given spending shift",
+            "Strategic acquisition of steel inventory ahead of tariff implementation"
         ],
         "risks": [
-            "Heightened regulatory scrutiny for future tech acquisitions in the space",
-            "Upward pressure on acquisition multiples could make future M&A less economically viable",
-            "Integration challenges may disrupt Alpha's existing product development",
-            "Smaller competitors may struggle to keep pace with combined entity's resources"
+            "Rising interest rates may further pressure housing market and consumer spending",
+            "Manufacturing costs likely to increase due to tariffs",
+            "Consumer spending weakness could spread to other sectors",
+            "Monetary tightening may affect corporate valuations across sectors"
         ]
     }
 }
-``` 
+```
+
+<cluster_data>
+
+{cluster_data}
+
+</cluster_data>

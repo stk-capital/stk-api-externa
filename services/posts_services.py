@@ -183,6 +183,8 @@ def create_posts_from_infos():
 
 #add embedding to posts that don't have it, in this case it will be the related infos first chunk summary
 def add_embedding_to_posts(max_workers=10):
+    #db_name_stkfeed = "STKFeed"
+    #db_name_alphasync = "alphasync_db"
     posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
     infos_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="infos")
     chunks_coll = get_mongo_collection(db_name=db_name_alphasync, collection_name="chunks")
@@ -215,7 +217,55 @@ def add_embedding_to_posts(max_workers=10):
         executor.map(process_post, posts_without_embedding)
 
 
+def deduplicate_posts(posts):
+    """
+    Remove posts duplicados (mesmo título e conteúdo).
+    
+    Args:
+        posts: Lista de posts
+        
+    Returns:
+        Lista de posts únicos (mantendo o primeiro de cada grupo de posts idênticos)
+    """
+    # Dicionário para mapear a combinação title+content para o primeiro post com essa combinação
+    unique_posts_map = {}
+    
+    # Estatísticas para logging
+    total_posts = len(posts)
+    duplicates_found = 0
+    
+    for post in posts:
+        # Criar uma chave baseada no título e conteúdo
+        title = post.get('title', '')
+        content = post.get('content', '')
+        
+        # Se não tiver título, usa apenas o conteúdo
+        if not title:
+            key = content
+        else:
+            key = f"{title}:{content}"
+        
+        # Se já existe um post com esta combinação, é uma duplicata
+        if key in unique_posts_map:
+            duplicates_found += 1
+            # Podemos registrar informações sobre duplicatas encontradas
+            logger.debug(f"Post duplicado encontrado: {post.get('_id')} (original: {unique_posts_map[key].get('_id')})")
+        else:
+            # Se é o primeiro post com esta combinação, adiciona ao mapa
+            unique_posts_map[key] = post
+    
+    # Converter o mapa de volta para uma lista
+    unique_posts = list(unique_posts_map.values())
+    
+    # Mostrar estatísticas
+    if duplicates_found > 0:
+        logger.info(f"Encontrados {duplicates_found} posts duplicados de um total de {total_posts}.")
+    
+    return unique_posts
+
+
 def clustering_posts():
+    #
     posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
     clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
     
@@ -228,7 +278,7 @@ def clustering_posts():
     # Buscar documentos com embeddings e infoId
     documents = list(posts_coll.find(
         {"embedding": {"$exists": True}}, 
-        {"embedding": 1, "_id": 1, "infoId": 1}
+        {"embedding": 1, "_id": 1, "title": 1, "content": 1}
     ))
     
     # Verificação inicial de documentos
@@ -236,36 +286,18 @@ def clustering_posts():
         logger.info("Não há documentos com embeddings para clustering")
         return
     
-    # Agrupar posts por infoId
-    posts_by_info = {}  # Representantes para clustering
-    all_posts_by_info = {}  # Todos os posts com o mesmo infoId
+    # Remover posts duplicados - mesmo título e conteúdo
+    unique_documents = deduplicate_posts(documents)
+    logger.info(f"De {len(documents)} posts originais, {len(unique_documents)} são únicos por título+conteúdo")
     
-    for doc in documents:
-        # Usar infoId como chave de agrupamento
-        info_id = doc.get("infoId", "unknown")
-        post_id = str(doc["_id"])
-        
-        # Armazenar todos os posts com o mesmo infoId
-        if info_id not in all_posts_by_info:
-            all_posts_by_info[info_id] = []
-        all_posts_by_info[info_id].append(post_id)
-        
-        # Usar apenas o primeiro post de cada infoId como representante
-        if info_id not in posts_by_info:
-            posts_by_info[info_id] = {
-                "_id": doc["_id"],
-                "embedding": doc["embedding"]
-            }
-    
-    # Verificar se temos posts suficientes para clustering APÓS o agrupamento
-    if len(posts_by_info) < 5:
-        logger.info(f"Apenas {len(posts_by_info)} conteúdos únicos para clustering (mínimo 5)")
+    # Verificar se temos posts suficientes para clustering após deduplicação
+    if len(unique_documents) < 5:
+        logger.info(f"Apenas {len(unique_documents)} conteúdos únicos para clustering (mínimo 5)")
         return
     
-    # Preparar arrays para clustering apenas com os representantes
-    unique_posts = list(posts_by_info.values())
-    embeddings = np.array([post["embedding"] for post in unique_posts])
-    info_ids = list(posts_by_info.keys())
+    # Preparar arrays para clustering diretamente com os documentos únicos
+    embeddings = np.array([doc["embedding"] for doc in unique_documents])
+    post_ids = [str(doc["_id"]) for doc in unique_documents]
     
     # Cluster com HDBSCAN
     clusterer = HDBSCAN(min_cluster_size=5, metric="euclidean")
@@ -273,15 +305,15 @@ def clustering_posts():
     
     # Agrupar conteúdos por label
     clusters_by_label = {}
-    for info_id, label in zip(info_ids, labels):
+    for post_id, label in zip(post_ids, labels):
         if label == -1:  # Skip noise points
             continue
             
         if label not in clusters_by_label:
             clusters_by_label[label] = []
             
-        # Adicionar todos os posts com o mesmo infoId ao cluster
-        clusters_by_label[label].extend(all_posts_by_info[info_id])
+        # Adicionar o post ao cluster
+        clusters_by_label[label].append(post_id)
     
     # Criar documentos de cluster
     clusters = []
@@ -295,12 +327,10 @@ def clustering_posts():
         
         # Logs informativos
         total_posts = sum(len(ids) for ids in clusters_by_label.values() if ids)
-        duplicated_infos = sum(1 for info_id in all_posts_by_info if len(all_posts_by_info[info_id]) > 1)
-        duplicate_posts = sum(len(all_posts_by_info[info_id])-1 for info_id in all_posts_by_info if len(all_posts_by_info[info_id]) > 1)
         
         logger.info(f"Criados {len(clusters)} clusters agrupando {total_posts} posts")
-        logger.info(f"De {len(documents)} posts originais, identificamos {len(posts_by_info)} infoIds únicos")
-        logger.info(f"Encontrados {duplicated_infos} infoIds duplicados com total de {duplicate_posts} posts duplicados")
+        logger.info(f"De {len(documents)} posts originais, {len(unique_documents)} são únicos por título+conteúdo")
+        logger.info(f"Removidos {len(documents) - len(unique_documents)} posts duplicados")
 
 #clen all documents from clusters collection
 def clean_clusters():
