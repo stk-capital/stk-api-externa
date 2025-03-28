@@ -423,6 +423,11 @@ def chunkenize_emails():
     for email_obj in emails_list:
         #email_obj = list(emails_list)[0]
         #print(email_obj.get_document_pretty())
+        #limit messsage size to 130 lines
+        email_lines = email_obj.get_lines_pretty(numbered=False)
+        if len(email_lines) > 130:
+            email_lines = email_lines[:130]
+        email_obj.body = "\n".join(email_lines)
         try:
             response = asyncio.run(
                 connect_to_graph_execution(
