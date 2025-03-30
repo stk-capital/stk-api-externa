@@ -11,6 +11,8 @@ import os
 from util.llm_services import execute_with_threads, execute_async
 from datetime import datetime
 import statistics
+from util.posts_utils import deduplicate_posts
+from models.clusters import Cluster
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +89,7 @@ def clustering_posts():
 def clean_clusters():
     clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
     clusters_coll.delete_many({})
-    
+
 def process_clusters():
     """
     Processa clusters não processados aplicando LLM diretamente,
