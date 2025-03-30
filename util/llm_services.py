@@ -330,7 +330,7 @@ def call_google_sync(prompt, config):
         except requests.RequestException as e:
             logger.error(f"Erro na requisição HTTP: {str(e)}")
             raise Exception(f"Erro na requisição para Google API: {str(e)}")
-            except Exception as e:
+        except Exception as e:
             logger.error(f"Erro ao processar resposta: {str(e)}")
             raise
     
@@ -961,19 +961,19 @@ async def process_cluster(cluster_data, prompt_template, model_name="gpt-3.5-tur
         String com a resposta ou objeto JSON parseado
     """
     # Preparar o prompt com dados do cluster
-        prompt = prompt_template.format(cluster_data=json.dumps(cluster_data, ensure_ascii=False))
+    prompt = prompt_template.format(cluster_data=json.dumps(cluster_data, ensure_ascii=False))
         
     # Obter resposta do LLM
     response = await execute_async(prompt, model_name=model_name, max_tokens=max_tokens, timeout=timeout, temperature=temperature)
         
     # Tentar parsear como JSON se parecer JSON
-        if response.strip().startswith('{') and response.strip().endswith('}'):
-            try:
-                return json.loads(response)
-            except json.JSONDecodeError:
-                return response
-    
-        return response
+    if response.strip().startswith('{') and response.strip().endswith('}'):
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return response
+
+    return response
 
 # ========== TESTES E EXEMPLOS ==========
 
