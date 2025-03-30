@@ -250,17 +250,7 @@ def process_clusters():
                 
                 # Executar análise usando a função LLM diretamente
                 logger.info(f"[PROCESSO-CLUSTERS] Executando análise do cluster {cluster['_id']} usando serviço LLM direto")
-                
-                # Salvar prompt formatado para depuração
-                try:
-                    log_dir = "logs"
-                    os.makedirs(log_dir, exist_ok=True)
-                    with open(f"{log_dir}/formatted_prompt_{cluster['_id']}.md", "w") as file:
-                        file.write(formatted_prompt)
-                    logger.info(f"[PROCESSO-CLUSTERS] Prompt salvo em {log_dir}/formatted_prompt_{cluster['_id']}.md")
-                except Exception as e:
-                    logger.warning(f"[PROCESSO-CLUSTERS] Não foi possível salvar o prompt para depuração: {str(e)}")
-                
+                  
                 # Usar execute_with_threads (versão síncrona)
                 logger.info(f"[PROCESSO-CLUSTERS] Chamando LLM (gemini-2.0-flash) para cluster {cluster['_id']}")
                 raw_response = execute_with_threads(
@@ -272,13 +262,7 @@ def process_clusters():
                 )
                 logger.info(f"[PROCESSO-CLUSTERS] Resposta do LLM recebida para cluster {cluster['_id']}")
                 
-                # Salvar resposta para depuração
-                try:
-                    with open(f"{log_dir}/raw_response.md", "w") as file:
-                        file.write(raw_response)
-                    logger.info(f"[PROCESSO-CLUSTERS] Resposta salva em {log_dir}/raw_response_{cluster['_id']}.md")
-                except Exception as e:
-                    logger.warning(f"[PROCESSO-CLUSTERS] Não foi possível salvar a resposta para depuração: {str(e)}")
+                # Salvar resposta para depuraç
                 
                 # Processar resposta (converter string JSON para objeto)
                 try:
