@@ -30,6 +30,7 @@ from fastapi.concurrency import run_in_threadpool
 from util.mongodb_utils import get_async_database
 from util.users_utils import get_company_logo
 from scripts.update_company_avatars import get_priority_companies, update_company_avatars
+import env
 
 
 # Configure logging properly for Azure App Service
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Added environment flag for development mode
-DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "false").lower() == "true"
+DEVELOPMENT_MODE = env.DEVELOPMENT_MODE
 
 app = FastAPI()
 
