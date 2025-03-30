@@ -14,6 +14,80 @@ import statistics
 
 logger = logging.getLogger(__name__)
 
+
+def clustering_posts():
+    #
+    posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
+    clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
+    
+    # Limpar clusters existentes
+    clusters_coll.delete_many({})
+    
+    from hdbscan import HDBSCAN
+    import numpy as np
+    
+    # Buscar documentos com embeddings e infoId
+    documents = list(posts_coll.find(
+        {"embedding": {"$exists": True}}, 
+        {"embedding": 1, "_id": 1, "title": 1, "content": 1}
+    ))
+    
+    # Verificação inicial de documentos
+    if len(documents) == 0:
+        logger.info("Não há documentos com embeddings para clustering")
+        return
+    
+    # Remover posts duplicados - mesmo título e conteúdo
+    unique_documents = deduplicate_posts(documents)
+    logger.info(f"De {len(documents)} posts originais, {len(unique_documents)} são únicos por título+conteúdo")
+    
+    # Verificar se temos posts suficientes para clustering após deduplicação
+    if len(unique_documents) < 5:
+        logger.info(f"Apenas {len(unique_documents)} conteúdos únicos para clustering (mínimo 5)")
+        return
+    
+    # Preparar arrays para clustering diretamente com os documentos únicos
+    embeddings = np.array([doc["embedding"] for doc in unique_documents])
+    post_ids = [str(doc["_id"]) for doc in unique_documents]
+    
+    # Cluster com HDBSCAN
+    clusterer = HDBSCAN(min_cluster_size=5, metric="euclidean")
+    labels = clusterer.fit_predict(embeddings)
+    
+    # Agrupar conteúdos por label
+    clusters_by_label = {}
+    for post_id, label in zip(post_ids, labels):
+        if label == -1:  # Skip noise points
+            continue
+            
+        if label not in clusters_by_label:
+            clusters_by_label[label] = []
+            
+        # Adicionar o post ao cluster
+        clusters_by_label[label].append(post_id)
+    
+    # Criar documentos de cluster
+    clusters = []
+    for label, post_ids in clusters_by_label.items():
+        cluster = Cluster(posts_ids=post_ids, label=int(label))
+        clusters.append(cluster.model_dump(by_alias=True))
+    
+    # Inserir clusters no MongoDB
+    if clusters:
+        clusters_coll.insert_many(clusters)
+        
+        # Logs informativos
+        total_posts = sum(len(ids) for ids in clusters_by_label.values() if ids)
+        
+        logger.info(f"Criados {len(clusters)} clusters agrupando {total_posts} posts")
+        logger.info(f"De {len(documents)} posts originais, {len(unique_documents)} são únicos por título+conteúdo")
+        logger.info(f"Removidos {len(documents) - len(unique_documents)} posts duplicados")
+
+#clen all documents from clusters collection
+def clean_clusters():
+    clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
+    clusters_coll.delete_many({})
+    
 def process_clusters():
     """
     Processa clusters não processados aplicando LLM diretamente,
