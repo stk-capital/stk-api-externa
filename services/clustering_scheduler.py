@@ -27,20 +27,25 @@ async def cluster_pipeline_scheduler():
     while True:
         try:
             current_time = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-            logger.info(f"Executando pipeline de clustering agendado em {current_time}")
+            logger.info(f"[CLUSTER-SCHEDULER] Executando pipeline de clustering agendado em {current_time}")
             
             # Executar o pipeline de clustering
+            logger.info(f"[CLUSTER-SCHEDULER] Chamando função run_cluster_pipeline()")
             result = await run_cluster_pipeline()
             
-            logger.info(f"Execução do pipeline de clustering concluída com sucesso. Resultados: {json.dumps(result, ensure_ascii=False)}")
+            logger.info(f"[CLUSTER-SCHEDULER] Execução do pipeline de clustering concluída com sucesso. Resultados: {json.dumps(result, ensure_ascii=False)}")
         except Exception as e:
-            logger.error(f"Erro na execução agendada do pipeline de clustering: {str(e)}")
+            logger.error(f"[CLUSTER-SCHEDULER] ERRO na execução agendada do pipeline de clustering: {str(e)}")
             # Log do traceback completo para melhor diagnóstico
-            logger.error(traceback.format_exc())
+            logger.error(f"[CLUSTER-SCHEDULER] Traceback completo: {traceback.format_exc()}")
         
         # Aguardar o intervalo configurado antes da próxima execução
-        logger.info(f"Próxima execução agendada para daqui a {INTERVAL//60} minutos")
-        await asyncio.sleep(INTERVAL)
+        logger.info(f"[CLUSTER-SCHEDULER] Próxima execução agendada para daqui a {INTERVAL//60} minutos")
+        try:
+            await asyncio.sleep(INTERVAL)
+            logger.info(f"[CLUSTER-SCHEDULER] Sleep concluído, iniciando nova execução")
+        except Exception as e:
+            logger.error(f"[CLUSTER-SCHEDULER] ERRO durante sleep: {str(e)}")
 
 async def run_cluster_pipeline():
     """
@@ -52,36 +57,58 @@ async def run_cluster_pipeline():
     Returns:
         dict: Resultado da execução com estatísticas
     """
+    logger.info(f"[CLUSTER-PIPELINE] Iniciando execução completa do pipeline de clustering")
     try:
         # Etapa 1: Clustering dos posts
         start_time = datetime.now()
-        logger.info("Iniciando clustering de posts...")
+        logger.info("[CLUSTER-PIPELINE] Iniciando clustering de posts...")
         
-        # Executar clustering_posts em uma thread separada para não bloquear o loop de eventos
-        await run_in_threadpool(clustering_posts)
+        try:
+            # Executar clustering_posts em uma thread separada para não bloquear o loop de eventos
+            logger.info("[CLUSTER-PIPELINE] Chamando função clustering_posts via run_in_threadpool")
+            await run_in_threadpool(clustering_posts)
+            logger.info("[CLUSTER-PIPELINE] Função clustering_posts concluída com sucesso")
+        except Exception as e:
+            logger.error(f"[CLUSTER-PIPELINE] ERRO durante clustering_posts: {str(e)}")
+            logger.error(f"[CLUSTER-PIPELINE] Traceback: {traceback.format_exc()}")
+            raise
         
         clustering_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Clustering de posts concluído em {clustering_time:.2f} segundos")
+        logger.info(f"[CLUSTER-PIPELINE] Clustering de posts concluído em {clustering_time:.2f} segundos")
         
         # Etapa 2: Processamento dos clusters gerados
         start_time = datetime.now()
-        logger.info("Iniciando processamento de clusters...")
+        logger.info("[CLUSTER-PIPELINE] Iniciando processamento de clusters...")
         
-        # Executar process_clusters em uma thread separada
-        await run_in_threadpool(process_clusters)
+        try:
+            # Executar process_clusters em uma thread separada
+            logger.info("[CLUSTER-PIPELINE] Chamando função process_clusters via run_in_threadpool")
+            await run_in_threadpool(process_clusters)
+            logger.info("[CLUSTER-PIPELINE] Função process_clusters concluída com sucesso")
+        except Exception as e:
+            logger.error(f"[CLUSTER-PIPELINE] ERRO durante process_clusters: {str(e)}")
+            logger.error(f"[CLUSTER-PIPELINE] Traceback: {traceback.format_exc()}")
+            raise
         
         processing_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Processamento de clusters concluído em {processing_time:.2f} segundos")
+        logger.info(f"[CLUSTER-PIPELINE] Processamento de clusters concluído em {processing_time:.2f} segundos")
         
         # Etapa 3: Atualização das trends baseadas nos clusters processados
         start_time = datetime.now()
-        logger.info("Atualizando trends...")
+        logger.info("[CLUSTER-PIPELINE] Atualizando trends...")
         
-        # Executar update_trends em uma thread separada
-        trends_result = await run_in_threadpool(update_trends)
+        try:
+            # Executar update_trends em uma thread separada
+            logger.info("[CLUSTER-PIPELINE] Chamando função update_trends via run_in_threadpool")
+            trends_result = await run_in_threadpool(update_trends)
+            logger.info("[CLUSTER-PIPELINE] Função update_trends concluída com sucesso")
+        except Exception as e:
+            logger.error(f"[CLUSTER-PIPELINE] ERRO durante update_trends: {str(e)}")
+            logger.error(f"[CLUSTER-PIPELINE] Traceback: {traceback.format_exc()}")
+            raise
         
         trends_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Atualização de trends concluída em {trends_time:.2f} segundos")
+        logger.info(f"[CLUSTER-PIPELINE] Atualização de trends concluída em {trends_time:.2f} segundos")
         
         # Preparar resultado da execução completa
         result = {
@@ -95,13 +122,16 @@ async def run_cluster_pipeline():
             "trends_result": trends_result
         }
         
+        logger.info(f"[CLUSTER-PIPELINE] Pipeline completo finalizado com sucesso em {(clustering_time + processing_time + trends_time):.2f} segundos")
         return result
     
     except Exception as e:
-        logger.error(f"Erro na execução do pipeline de clustering: {str(e)}")
+        logger.error(f"[CLUSTER-PIPELINE] ERRO CRÍTICO na execução do pipeline de clustering: {str(e)}")
+        logger.error(f"[CLUSTER-PIPELINE] Traceback completo: {traceback.format_exc()}")
         return {
             "status": "error",
             "error": str(e),
+            "error_type": type(e).__name__,
             "traceback": traceback.format_exc()
         }
 
@@ -110,11 +140,14 @@ async def run_clustering_pipeline():
     """
     Função para executar o pipeline de clustering sob demanda.
     """
+    logger.info("[CLUSTER-API] Iniciando execução do pipeline de clustering via API")
     try:
         result = await run_cluster_pipeline()
+        logger.info(f"[CLUSTER-API] Pipeline executado com sucesso via API: {json.dumps(result, ensure_ascii=False)}")
         return result
     except Exception as e:
-        logger.error(f"Erro ao executar pipeline de clustering: {str(e)}")
+        logger.error(f"[CLUSTER-API] ERRO ao executar pipeline de clustering via API: {str(e)}")
+        logger.error(f"[CLUSTER-API] Traceback: {traceback.format_exc()}")
         return {
             "success": False, 
             "message": f"Erro ao executar pipeline de clustering: {str(e)}"

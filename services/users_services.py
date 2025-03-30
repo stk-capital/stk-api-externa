@@ -3,7 +3,7 @@ from util.mongodb_utils import get_mongo_collection
 from env import db_name_alphasync, db_name_stkfeed
 from models.users import User
 import logging
-from util.users_utils import format_followers
+from util.users_utils import format_followers, get_company_logo
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,9 @@ def create_users_from_companies():
                 final_handle = f"{clean_handle}{suffix}"
                 suffix += 1
 
+            # Obter logo da empresa usando Clearbit
+            company_avatar = get_company_logo(company['name'], str(company['_id']))
+            
             # Create and insert user
             user = User(
                 companyId=str(company['_id']),
@@ -55,11 +58,12 @@ def create_users_from_companies():
                 handle=final_handle,
                 description=company.get('description', ''),
                 website=company.get('website', ''),
-                followers=format_followers(company.get('followers', 0))
+                followers=format_followers(company.get('followers', 0)),
+                avatar=company_avatar  # Usar o avatar obtido
             )
             
             users_coll.insert_one(user.model_dump(by_alias=True))
-            logger.info(f"Created user {final_handle} for company {company['_id']}")
+            logger.info(f"Created user {final_handle} for company {company['_id']} with avatar {company_avatar}")
 
         except Exception as e:
             logger.error(f"Failed creating user for company {company['_id']}: {e}")
