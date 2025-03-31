@@ -330,7 +330,7 @@ def call_google_sync(prompt, config):
         except requests.RequestException as e:
             logger.error(f"Erro na requisição HTTP: {str(e)}")
             raise Exception(f"Erro na requisição para Google API: {str(e)}")
-            except Exception as e:
+        except Exception as e:
             logger.error(f"Erro ao processar resposta: {str(e)}")
             raise
     
@@ -338,87 +338,86 @@ def call_google_sync(prompt, config):
     return LLMResponse(
         text="Não foi possível obter uma resposta do modelo após várias tentativas.",
         model_name=config.model_name,
-                    status="error",
+        status="error",
         error="Respostas vazias persistentes"
     )
 
 # Versão assíncrona - OpenAI
 async def call_openai_async(prompt, config):
-        api_url = config.api_base or "https://api.openai.com/v1/chat/completions"
+    api_url = config.api_base or "https://api.openai.com/v1/chat/completions"
+    
+    async with aiohttp.ClientSession() as session:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.api_key}"
+        }
         
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.api_key}"
-            }
-            
-            payload = {
-                "model": config.model_name,
+        payload = {
+            "model": config.model_name,
             "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": config.max_tokens,
-                "temperature": config.temperature
-            }
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature
+        }
+        
+        async with session.post(
+            api_url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=config.timeout)
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"OpenAI API error: {response.status}, {error_text}")
             
-                async with session.post(
-                    api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=config.timeout)
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        raise Exception(f"OpenAI API error: {response.status}, {error_text}")
-                    
-                    result = await response.json()
-                    
-                    text = result["choices"][0]["message"]["content"]
+            result = await response.json()
+            
+            text = result["choices"][0]["message"]["content"]
             tokens = {
                 "prompt": result["usage"]["prompt_tokens"],
                 "completion": result["usage"]["completion_tokens"],
                 "total": result["usage"]["total_tokens"]
             }
-                    
-                    return LLMResponse(
-                        text=text,
-                        model_name=config.model_name,
+            
+            return LLMResponse(
+                text=text,
+                model_name=config.model_name,
                 tokens=tokens
             )
 
 # Versão assíncrona - Anthropic
 async def call_anthropic_async(prompt, config):
     api_url = config.api_base or "https://api.anthropic.com/v1/messages"
+    
+    async with aiohttp.ClientSession() as session:
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": config.api_key,
+            "anthropic-version": "2023-06-01"
+        }
         
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Content-Type": "application/json",
-                "x-api-key": config.api_key,
-                "anthropic-version": "2023-06-01"
-            }
-            
-            payload = {
-                "model": config.model_name,
+        payload = {
+            "model": config.model_name,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": config.max_tokens
-            }
+        }
+        
+        async with session.post(
+            api_url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=config.timeout)
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"Anthropic API error: {response.status}, {error_text}")
             
-            async with session.post(
-                api_url,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=config.timeout)
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"Anthropic API error: {response.status}, {error_text}")
-                
-                
             result = await response.json()
-                text = result["content"][0]["text"]
+            text = result["content"][0]["text"]
                 
-                return LLMResponse(
-                    text=text,
+            return LLMResponse(
+                text=text,
                 model_name=config.model_name
-                    )
+            )
 
 # Versão assíncrona - Google
 async def call_google_async(prompt, config):
@@ -564,9 +563,9 @@ async def call_google_async(prompt, config):
                                 
                                 for i, part in enumerate(parts):
                                     logger.info(f"Part {i} keys: {list(part.keys())}")
-                                if "text" in part:
-                                    text += part["text"]
-                                    logger.info(f"Texto encontrado em part {i}: {part['text'][:30]}...")
+                                    if "text" in part:
+                                        text += part["text"]
+                                        logger.info(f"Texto encontrado em part {i}: {part['text'][:30]}...")
                     
                     # Se não houver candidates mas temos usageMetadata, é uma resposta vazia
                     elif "usageMetadata" in result and not text and retry_count < max_empty_retries:
@@ -962,19 +961,19 @@ async def process_cluster(cluster_data, prompt_template, model_name="gpt-3.5-tur
         String com a resposta ou objeto JSON parseado
     """
     # Preparar o prompt com dados do cluster
-        prompt = prompt_template.format(cluster_data=json.dumps(cluster_data, ensure_ascii=False))
+    prompt = prompt_template.format(cluster_data=json.dumps(cluster_data, ensure_ascii=False))
         
     # Obter resposta do LLM
     response = await execute_async(prompt, model_name=model_name, max_tokens=max_tokens, timeout=timeout, temperature=temperature)
         
     # Tentar parsear como JSON se parecer JSON
-        if response.strip().startswith('{') and response.strip().endswith('}'):
-            try:
-                return json.loads(response)
-            except json.JSONDecodeError:
-                return response
-    
-        return response
+    if response.strip().startswith('{') and response.strip().endswith('}'):
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            return response
+
+    return response
 
 # ========== TESTES E EXEMPLOS ==========
 

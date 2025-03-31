@@ -13,7 +13,6 @@ from services.emails_services import _process_emails
 from services.chunks_services import _process_chunks
 from services.users_services import _process_users
 from services.posts_services import _process_posts
-from services.events_services import _process_events
 from services.trends_services import update_trends
 from datetime import timedelta
 from services.clustering_scheduler import cluster_pipeline_scheduler, run_clustering_pipeline
@@ -29,6 +28,9 @@ import sys
 # Import for running sync functions in a threadpool
 from fastapi.concurrency import run_in_threadpool
 from util.mongodb_utils import get_async_database
+from util.users_utils import get_company_logo
+from scripts.update_company_avatars import get_priority_companies, update_company_avatars
+import env
 
 
 # Configure logging properly for Azure App Service
@@ -44,7 +46,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Added environment flag for development mode
-DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "false").lower() == "true"
+DEVELOPMENT_MODE = env.DEVELOPMENT_MODE
 
 app = FastAPI()
 
@@ -154,7 +156,13 @@ async def startup_event():
         # Inicia o agendador do endpoint de pipeline
         asyncio.create_task(pipeline_scheduler())
         # Inicia o agendador do pipeline de clustering (executa a cada hora)
-        asyncio.create_task(cluster_pipeline_scheduler())
+        logger.info("[STARTUP] Iniciando agendador do pipeline de clustering")
+        try:
+            task = asyncio.create_task(cluster_pipeline_scheduler())
+            logger.info("[STARTUP] Agendador do pipeline de clustering iniciado com sucesso")
+        except Exception as e:
+            logger.error(f"[STARTUP] ERRO ao iniciar agendador do pipeline de clustering: {str(e)}")
+            logger.error(f"[STARTUP] Traceback: {traceback.format_exc()}")
     else:
         logger.info("Scheduler disabled - Development mode")
     logger.info("Agendadores iniciados com sucesso")
@@ -179,11 +187,14 @@ async def update_trends_endpoint():
     Atualiza a coleção de trends a partir dos clusters processados.
     """
     try:
+        logger.info("[API] Iniciando atualização de trends via endpoint")
         result = await run_in_threadpool(update_trends)
+        logger.info(f"[API] Atualização de trends concluída: {json.dumps(result, ensure_ascii=False)}")
         return result
     except Exception as e:
-        logger.error(f"Trends update error: {e}")
-        raise HTTPException(status_code=500, detail="Error updating trends")
+        logger.error(f"[API] Erro na atualização de trends: {str(e)}")
+        logger.error(f"[API] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error updating trends: {str(e)}")
 
 @app.post("/api/clustering/run")
 async def run_clustering_endpoint():
@@ -194,11 +205,133 @@ async def run_clustering_endpoint():
     3. Atualização de trends
     """
     try:
+        logger.info("[API] Iniciando pipeline de clustering via endpoint")
         result = await run_clustering_pipeline()
+        logger.info(f"[API] Pipeline de clustering concluído: {json.dumps(result, ensure_ascii=False)}")
         return result
     except Exception as e:
-        logger.error(f"Clustering pipeline error: {e}")
-        raise HTTPException(status_code=500, detail="Error executing clustering pipeline")
+        logger.error(f"[API] Erro no pipeline de clustering: {str(e)}")
+        logger.error(f"[API] Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error executing clustering pipeline: {str(e)}")
+
+# Variável global para armazenar o status da atualização
+avatar_update_status = {
+    "is_running": False,
+    "start_time": None,
+    "end_time": None,
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0
+}
+
+@app.post("/api/users/update-avatars")
+async def update_users_avatars(limit: int = 400, batch_size: int = 50):
+    """
+    Atualiza os avatares dos usuários existentes usando a API Clearbit.
+    Foca nas empresas mais importantes com base em métricas de engajamento.
+    
+    Args:
+        limit: Número máximo de empresas para processar (padrão: 400)
+        batch_size: Tamanho do lote de processamento (padrão: 50)
+    """
+    global avatar_update_status
+    
+    # Verificar se já está em execução
+    if avatar_update_status["is_running"]:
+        return {
+            "message": "Uma atualização de avatares já está em andamento",
+            "status": avatar_update_status
+        }
+        
+    try:
+        # Marcar como em execução
+        avatar_update_status = {
+            "is_running": True,
+            "start_time": datetime.now().isoformat(),
+            "end_time": None,
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0
+        }
+        
+        # Executar em threadpool para não bloquear
+        priority_companies = await run_in_threadpool(get_priority_companies, limit=limit)
+        avatar_update_status["total"] = len(priority_companies)
+        
+        # Função para executar e atualizar status
+        async def execute_update():
+            global avatar_update_status
+            try:
+                stats = await run_in_threadpool(
+                    update_company_avatars, 
+                    priority_companies, 
+                    batch_size=batch_size
+                )
+                
+                # Atualizar status final
+                avatar_update_status.update({
+                    "is_running": False,
+                    "end_time": datetime.now().isoformat(),
+                    "processed": stats["processed"],
+                    "success": stats["success"],
+                    "failed": stats["failed"]
+                })
+            except Exception as e:
+                logger.error(f"Erro durante atualização de avatares: {str(e)}")
+                avatar_update_status.update({
+                    "is_running": False,
+                    "end_time": datetime.now().isoformat(),
+                    "error": str(e)
+                })
+        
+        # Iniciar processamento em background
+        asyncio.create_task(execute_update())
+        
+        return {
+            "message": f"Atualização de avatares iniciada para {len(priority_companies)} empresas",
+            "companies_count": len(priority_companies),
+            "status": "processing"
+        }
+    except Exception as e:
+        # Resetar status em caso de erro
+        avatar_update_status["is_running"] = False
+        avatar_update_status["error"] = str(e)
+        
+        logger.error(f"Erro ao iniciar atualização de avatares: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao iniciar atualização de avatares: {str(e)}")
+
+@app.get("/api/users/avatar-update-status")
+async def get_avatar_update_status():
+    """
+    Retorna o status atual da atualização de avatares.
+    """
+    global avatar_update_status
+    
+    # Calcular estatísticas adicionais se estiver em execução
+    if avatar_update_status["is_running"] and avatar_update_status["total"] > 0:
+        progress = (avatar_update_status["processed"] / avatar_update_status["total"]) * 100
+        
+        # Calcular tempo estimado para conclusão
+        if avatar_update_status["processed"] > 0 and avatar_update_status["start_time"]:
+            start_time = datetime.fromisoformat(avatar_update_status["start_time"])
+            elapsed_seconds = (datetime.now() - start_time).total_seconds()
+            rate = avatar_update_status["processed"] / elapsed_seconds
+            remaining_items = avatar_update_status["total"] - avatar_update_status["processed"]
+            
+            if rate > 0:
+                estimated_seconds_remaining = remaining_items / rate
+                estimated_completion = (datetime.now() + timedelta(seconds=estimated_seconds_remaining)).isoformat()
+                
+                return {
+                    **avatar_update_status,
+                    "progress_percent": round(progress, 2),
+                    "elapsed_seconds": round(elapsed_seconds, 2),
+                    "estimated_completion": estimated_completion
+                }
+    
+    return avatar_update_status
 
 if __name__ == "__main__":
 
