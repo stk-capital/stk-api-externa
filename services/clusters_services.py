@@ -40,7 +40,7 @@ def clustering_posts():
         documents = list(posts_coll.find(
             {"embedding": {"$exists": True}}, 
             {"embedding": 1, "_id": 1, "title": 1, "content": 1}
-        ))
+        ).sort("created_at", -1))
         
         logger.info(f"[CLUSTERING] Encontrados {len(documents)} posts com embeddings")
         
