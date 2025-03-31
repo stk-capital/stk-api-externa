@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from bson import ObjectId
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import List, Optional, Dict, Any, Union
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, Request
 from datetime import datetime
 from scheduler import start_scheduler
 import asyncio
@@ -13,6 +13,7 @@ from services.emails_services import _process_emails
 from services.chunks_services import _process_chunks
 from services.users_services import _process_users
 from services.posts_services import _process_posts
+from services.events_services import _process_events
 from services.trends_services import update_trends
 from datetime import timedelta
 from services.clustering_scheduler import cluster_pipeline_scheduler, run_clustering_pipeline
@@ -22,16 +23,17 @@ import os
 from dotenv import load_dotenv
 from services.langchain_services import execute_graph
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse
 import traceback
 import json
 import sys
 # Import for running sync functions in a threadpool
 from fastapi.concurrency import run_in_threadpool
-from util.mongodb_utils import get_async_database
+from util.mongodb_utils import get_async_database, get_mongo_collection
 from util.users_utils import get_company_logo
 from scripts.update_company_avatars import get_priority_companies, update_company_avatars
 import env
-
+from pathlib import Path
 
 # Configure logging properly for Azure App Service
 logging.basicConfig(
@@ -61,6 +63,76 @@ app.add_middleware(
 # Mount the /tmp directory to serve images
 app.mount("/api/images/tmp", StaticFiles(directory="/tmp"), name="images")
 db = get_async_database("crewai_db")
+
+@app.get("/api/company-logo/{company_id}")
+async def serve_company_logo(company_id: str, request: Request):
+    """
+    Endpoint dinâmico para servir logos de empresas.
+    
+    Verifica se o logo existe localmente em /tmp/company_logos.
+    Se existir, retorna o arquivo diretamente.
+    Se não existir, busca o nome da empresa no banco de dados e 
+    tenta obter o logo utilizando a função get_company_logo.
+    
+    Usa placeholder apenas em caso de erro ou timeout.
+    """
+    # Configuração para diretório de logos (mesmo da função original)
+    LOGO_DIR = "/tmp/company_logos"
+    LOGO_BASE_URL = "/api/images/tmp/company_logos"
+    file_path = os.path.join(LOGO_DIR, f"{company_id}.png")
+    
+    # Verificar se o diretório existe, se não, cria
+    Path(LOGO_DIR).mkdir(parents=True, exist_ok=True)
+    
+    # Verificar se o arquivo já existe
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="image/png")
+    
+    # Se não existir, precisamos buscar o nome da empresa no banco de dados
+    try:
+        # Primeiro, tenta encontrar na coleção de usuários (mais provável)
+        users_coll = get_mongo_collection(db_name=env.db_name_stkfeed, collection_name="users")
+        user = users_coll.find_one({"companyId": company_id})
+        
+        company_name = None
+        if user:
+            company_name = user.get("name")
+        else:
+            # Se não encontrou, tenta buscar na coleção de empresas
+            companies_coll = get_mongo_collection(db_name=env.db_name_alphasync, collection_name="companies")
+            try:
+                company = companies_coll.find_one({"_id": ObjectId(company_id)})
+                if company:
+                    company_name = company.get("name")
+            except:
+                # Se o ID não for um ObjectId válido, tenta como string
+                company = companies_coll.find_one({"_id": company_id})
+                if company:
+                    company_name = company.get("name")
+        
+        # Se não encontrou o nome da empresa
+        if not company_name:
+            logger.warning(f"Não foi possível encontrar o nome da empresa para o ID {company_id}")
+            # Retorna placeholder por não ter como buscar a imagem
+            return RedirectResponse("/placeholder.svg?height=400&width=400")
+        
+        # Agora com o nome da empresa, podemos buscar o logo
+        logger.info(f"Obtendo logo para empresa {company_name} (ID: {company_id})")
+        logo_url = await run_in_threadpool(get_company_logo, company_name, company_id)
+        
+        # Verifica se o arquivo foi realmente criado após a chamada
+        if os.path.exists(file_path):
+            logger.info(f"Logo obtido com sucesso para {company_name}: {file_path}")
+            return FileResponse(file_path, media_type="image/png")
+        else:
+            # Se por algum motivo o arquivo não foi criado
+            logger.warning(f"Logo não foi criado para {company_name} após chamada à get_company_logo")
+            return RedirectResponse("/placeholder.svg?height=400&width=400")
+            
+    except Exception as e:
+        logger.error(f"Erro ao servir logo para empresa ID {company_id}: {str(e)}")
+        logger.error(traceback.format_exc())
+        return RedirectResponse("/placeholder.svg?height=400&width=400")
 
 class PyObjectId(ObjectId):
     @classmethod
