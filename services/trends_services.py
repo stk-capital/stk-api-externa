@@ -57,7 +57,7 @@ def generate_trends_from_clusters():
         # Buscar todos os clusters processados com score de relevância >= 0.5
         logger.info("[TRENDS] Buscando clusters processados com relevance_score >= 0.5")
         processed_clusters = list(clusters_coll.find(
-            {"was_processed": True, "relevance_score": {"$gte": 0.5}},
+            {"was_processed": True, "relevance_score": {"$gte": 0.2}},
             {"_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
              "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
              "stakeholder_impact": 1, "sector_specific": 1}
