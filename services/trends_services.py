@@ -129,6 +129,7 @@ def generate_trends_from_clusters():
                     "posts": len(cluster.get("posts_ids", [])),
                     "summary": summary,
                     "lastUpdated": last_updated,
+                    "updated_at": cluster.get("newest_post_date", datetime.utcnow()),
                     "disclaimer": default_disclaimer,
                     "postIds": cluster.get("posts_ids", []),
                     "key_points": cluster.get("key_points", []),
