@@ -29,8 +29,8 @@ def clustering_posts():
         
         # Limpar clusters existentes
         logger.info("[CLUSTERING] Limpando clusters existentes")
-        delete_result = clusters_coll.delete_many({})
-        logger.info(f"[CLUSTERING] {delete_result.deleted_count} clusters anteriores foram removidos")
+        #delete_result = clusters_coll.delete_many({})
+        #logger.info(f"[CLUSTERING] {delete_result.deleted_count} clusters anteriores foram removidos")
         
         from hdbscan import HDBSCAN
         import numpy as np
@@ -105,20 +105,89 @@ def clustering_posts():
             cluster = Cluster(posts_ids=post_ids, label=int(label))
             clusters.append(cluster.model_dump(by_alias=True))
         
-        # Inserir clusters no MongoDB
-        if clusters:
-            logger.info(f"[CLUSTERING] Inserindo {len(clusters)} clusters no MongoDB")
-            insert_result = clusters_coll.insert_many(clusters)
-            logger.info(f"[CLUSTERING] {len(insert_result.inserted_ids)} clusters inseridos com sucesso")
+        # Verificar a existência de clusters antes de inserir
+        logger.info("[CLUSTERING] Verificando existência de clusters similares antes da inserção")
+        existing_clusters = list(clusters_coll.find({}, {"posts_ids": 1}))
+        
+        # Filtrar clusters para inserção baseado na correspondência com existentes
+        clusters_to_insert = []
+        clusters_to_update = []
+        
+        for new_cluster in clusters:
+            #new_cluster = clusters[0]
+            new_posts_set = set(new_cluster["posts_ids"])
+            matched_cluster = None
+            highest_match_percentage = 0
             
-            # Logs informativos
-            total_posts = sum(len(ids) for ids in clusters_by_label.values() if ids)
+            for existing_cluster in existing_clusters:
+                existing_posts_set = set(existing_cluster["posts_ids"])
+                
+                # Verificar correspondência 100%
+                if new_posts_set == existing_posts_set:
+                    logger.info(f"[CLUSTERING] Cluster idêntico encontrado para label {new_cluster['label']}, ignorando inserção")
+                    matched_cluster = existing_cluster
+                    highest_match_percentage = 100
+                    break
+                
+                # Verificar correspondência parcial
+                union_set = new_posts_set.union(existing_posts_set)
+                intersection_set = new_posts_set.intersection(existing_posts_set)
+                
+                if len(union_set) > 0:
+                    match_percentage = (len(intersection_set) / len(union_set)) * 100
+                    
+                    if match_percentage > highest_match_percentage:
+                        highest_match_percentage = match_percentage
+                        matched_cluster = existing_cluster
             
-            logger.info(f"[CLUSTERING] Criados {len(clusters)} clusters agrupando {total_posts} posts")
-            logger.info(f"[CLUSTERING] De {len(documents)} posts originais, {len(unique_documents)} são únicos por título+conteúdo")
-            logger.info(f"[CLUSTERING] Removidos {len(documents) - len(unique_documents)} posts duplicados")
+            # Tomar decisão com base no percentual de correspondência
+            if highest_match_percentage == 100:
+                # Cluster 100% idêntico - ignorar
+                continue
+            elif highest_match_percentage >= 40:
+                # Correspondência parcial significativa (≥ 40%) - atualizar cluster existente
+                logger.info(f"[CLUSTERING] Cluster com {highest_match_percentage:.2f}% de correspondência encontrado, atualizando")
+                # Unir posts_ids do novo cluster com o existente
+                existing_posts_set = set(matched_cluster["posts_ids"])
+                merged_posts_ids = list(new_posts_set.union(existing_posts_set))
+                
+                clusters_to_update.append({
+                    "cluster_id": matched_cluster["_id"],
+                    "posts_ids": merged_posts_ids,
+                    "was_processed": False  # Reset do processamento para reanalisar o cluster
+                })
+            else:
+                # Correspondência baixa (<40%) - criar novo cluster
+                logger.info(f"[CLUSTERING] Nenhum cluster similar encontrado (máx {highest_match_percentage:.2f}%), criando novo")
+                clusters_to_insert.append(new_cluster)
+        
+        # Executar atualizações para clusters existentes
+        if clusters_to_update:
+            logger.info(f"[CLUSTERING] Atualizando {len(clusters_to_update)} clusters existentes")
+            for update_info in clusters_to_update:
+                clusters_coll.update_one(
+                    {"_id": update_info["cluster_id"]},
+                    {"$set": {
+                        "posts_ids": update_info["posts_ids"],
+                        "was_processed": update_info["was_processed"]
+                    }}
+                )
+            
+        # Inserir novos clusters
+        if clusters_to_insert:
+            logger.info(f"[CLUSTERING] Inserindo {len(clusters_to_insert)} novos clusters no MongoDB")
+            insert_result = clusters_coll.insert_many(clusters_to_insert)
+            logger.info(f"[CLUSTERING] {len(insert_result.inserted_ids)} novos clusters inseridos com sucesso")
         else:
-            logger.warning("[CLUSTERING] Nenhum cluster foi criado após o processamento")
+            logger.info("[CLUSTERING] Nenhum novo cluster para inserir após verificações de duplicação")
+            
+        # Logs informativos
+        total_posts = sum(len(ids) for ids in clusters_by_label.values() if ids)
+        
+        logger.info(f"[CLUSTERING] Processados {len(clusters)} clusters candidatos")
+        logger.info(f"[CLUSTERING] Resultado final: {len(clusters_to_insert)} novos clusters, {len(clusters_to_update)} atualizados")
+        logger.info(f"[CLUSTERING] De {len(documents)} posts originais, {len(unique_documents)} são únicos por título+conteúdo")
+        logger.info(f"[CLUSTERING] Removidos {len(documents) - len(unique_documents)} posts duplicados")
     except Exception as e:
         logger.error(f"[CLUSTERING] ERRO CRÍTICO durante o clustering: {str(e)}")
         logger.error(f"[CLUSTERING] Traceback completo: {traceback.format_exc()}")
