@@ -22,7 +22,7 @@ async def cluster_pipeline_scheduler():
     logger.info("Iniciando o agendador do pipeline de clustering")
     
     # Intervalo em segundos entre execuções (1 hora = 3600 segundos)
-    INTERVAL = 300
+    INTERVAL = 1800
     
     while True:
         try:
