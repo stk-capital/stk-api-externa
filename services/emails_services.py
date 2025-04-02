@@ -65,6 +65,8 @@ def filter_emails():
     for email_obj in emails_list:
         #email_obj = list(emails_list)[0]
         #print(email_obj.get_document_pretty())
+        #limit the email to 130 lines
+        email_obj.body = "\n".join(email_obj.body.split("\n")[:130])
         try:
             response = asyncio.run(
                 connect_to_graph_execution(
@@ -101,6 +103,8 @@ def chunkenize_emails():
     for email_obj in emails_list:
         #email_obj = list(emails_list)[0]
         #print(email_obj.get_document_pretty())
+        #limit the email to 130 lines
+        email_obj.body = "\n".join(email_obj.body.split("\n")[:130])
         try:
             response = asyncio.run(
                 connect_to_graph_execution(
