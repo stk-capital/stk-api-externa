@@ -27,7 +27,7 @@ def execute_pipeline():
         logger.info(f"Iniciando execução agendada do pipeline em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         response = requests.post(
             PIPELINE_ENDPOINT, 
-            json={"process_emails_count": 10}
+            json={"process_emails_count": 50}
         )
         if response.status_code == 200:
             result = response.json()
