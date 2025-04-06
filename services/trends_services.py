@@ -67,9 +67,13 @@ def generate_trends_from_clusters():
             {
                 "_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
                 "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
-                "stakeholder_impact": 1, "sector_specific": 1
+                "stakeholder_impact": 1, "sector_specific": 1,
+                "users_ids": 1
             }
         ))
+        #limit the len(users_ids) to 100
+        updated_clusters = [cluster for cluster in updated_clusters if len(cluster.get("users_ids", [])) <= 100]
+        
         
         logger.info(f"[TRENDS] Encontrados {len(updated_clusters)} clusters atualizados para verificar")
         

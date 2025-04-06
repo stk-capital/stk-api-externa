@@ -9,7 +9,7 @@ import logging
 from util.parsing_utils import extract_json_from_content
 import os
 from util.llm_services import execute_with_threads, execute_async
-from datetime import datetime
+from datetime import datetime, timedelta
 import statistics
 from util.posts_utils import deduplicate_posts
 from models.clusters import Cluster
@@ -36,13 +36,16 @@ def clustering_posts():
         import numpy as np
         
         # Buscar documentos com embeddings e infoId
-        logger.info("[CLUSTERING] Buscando posts com embeddings")
+        logger.info("[CLUSTERING] Buscando posts com embeddings dos últimos 7 dias")
+        # Calcular a data de 7 dias atrás
+        seven_days_ago = datetime.now() - timedelta(days=7)
+        
         documents = list(posts_coll.find(
-            {"embedding": {"$exists": True}}, 
-            {"embedding": 1, "_id": 1, "title": 1, "content": 1}
+            {"embedding": {"$exists": True}, "created_at": {"$gte": seven_days_ago}}, 
+            {"embedding": 1, "_id": 1, "title": 1, "content": 1, "created_at": 1}
         ).sort("created_at", -1))
         
-        logger.info(f"[CLUSTERING] Encontrados {len(documents)} posts com embeddings")
+        logger.info(f"[CLUSTERING] Encontrados {len(documents)} posts com embeddings nos últimos 7 dias")
         
         # Verificação inicial de documentos
         if len(documents) == 0:
@@ -330,8 +333,8 @@ def process_clusters():
                 raw_response = execute_with_threads(
                     formatted_prompt,
                     model_name="gemini-2.0-flash",  # Ou outro modelo configurado
-                    max_tokens=4000,
-                    timeout=120.0,
+                    max_tokens=100000,
+                    timeout=200.0,
                     temperature=1
                 )
                 logger.info(f"[PROCESSO-CLUSTERS] Resposta do LLM recebida para cluster {cluster['_id']}")
