@@ -39,9 +39,11 @@ def format_time_ago(date):
 
 def generate_trends_from_clusters():
     """
-    Gera trends a partir dos clusters processados e os salva na coleção 'trends'.
+    Gera e atualiza trends a partir dos clusters processados:
+    1. Atualiza trends existentes para clusters marcados com was_updated=True
+    2. Cria novas trends para clusters processados que ainda não têm trends associadas
     """
-    logger.info("[TRENDS] Iniciando geração de trends a partir de clusters...")
+    logger.info("[TRENDS] Iniciando geração e atualização de trends a partir de clusters...")
     
     try:
         # Conectar às coleções
@@ -49,34 +51,136 @@ def generate_trends_from_clusters():
         clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
         trends_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="trends")
         
-        # Limpar coleção de trends existentes
-        logger.info("[TRENDS] Limpando coleção de trends existentes")
-        delete_result = trends_coll.delete_many({})
-        logger.info(f"[TRENDS] {delete_result.deleted_count} trends anteriores foram removidas")
-        
-        # Buscar todos os clusters processados com score de relevância >= 0.5
-        logger.info("[TRENDS] Buscando clusters processados com relevance_score >= 0.5")
-        processed_clusters = list(clusters_coll.find(
-            {"was_processed": True, "relevance_score": {"$gte": 0.2}},
-            {"_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
-             "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
-             "stakeholder_impact": 1, "sector_specific": 1}
-        ))
-        
-        if not processed_clusters:
-            logger.warning("[TRENDS] Nenhum cluster processado encontrado para gerar trends")
-            return 0
-        
-        logger.info(f"[TRENDS] Encontrados {len(processed_clusters)} clusters processados para gerar trends")
-        
         # Disclaimer padrão
         default_disclaimer = "This story is a summary of posts and may evolve over time."
         
-        # Processar cada cluster e transformar em trend
-        trends = []
+        # 1. ATUALIZAR TRENDS EXISTENTES PARA CLUSTERS ATUALIZADOS
+        logger.info("[TRENDS] Buscando clusters atualizados com trends existentes")
         
-        for idx, cluster in enumerate(processed_clusters):
-            logger.info(f"[TRENDS] Processando cluster {idx+1}/{len(processed_clusters)}: {cluster['_id']}")
+        # Buscar todos os clusters que foram atualizados (was_updated=True)
+        updated_clusters = list(clusters_coll.find(
+            {
+                "was_updated": True, 
+                "was_processed": True, 
+                "relevance_score": {"$gte": 0.2}
+            },
+            {
+                "_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
+                "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
+                "stakeholder_impact": 1, "sector_specific": 1
+            }
+        ))
+        
+        logger.info(f"[TRENDS] Encontrados {len(updated_clusters)} clusters atualizados para verificar")
+        
+        updated_trend_count = 0
+        
+        for cluster in updated_clusters:
+            cluster_id = str(cluster["_id"])
+            
+            # Buscar trend existente para este cluster
+            existing_trend = trends_coll.find_one({"cluster_id": cluster_id})
+            
+            if existing_trend:
+                logger.info(f"[TRENDS] Atualizando trend existente para cluster: {cluster_id}")
+                
+                # Formatar data de última atualização
+                last_updated = "recently"
+                if "newest_post_date" in cluster and cluster["newest_post_date"]:
+                    newest_date = cluster["newest_post_date"]
+                    if isinstance(newest_date, str):
+                        try:
+                            newest_date = datetime.fromisoformat(newest_date.replace('Z', '+00:00'))
+                        except ValueError:
+                            try:
+                                newest_date = datetime.strptime(newest_date, "%Y-%m-%dT%H:%M:%S.%fZ")
+                            except ValueError:
+                                logger.warning(f"[TRENDS] Formato de data não reconhecido: {newest_date}, usando data atual")
+                                newest_date = datetime.now()
+                    last_updated = format_time_ago(newest_date)
+                
+                # Construir summary completo com key points, riscos e oportunidades
+                summary = cluster.get("summary", "")
+                if not summary:
+                    logger.warning(f"[TRENDS] Cluster {cluster_id} não possui resumo")
+                
+                # Incluir pontos-chave 
+                if cluster.get("key_points"):
+                    summary += "\n\nKey Points:\n"
+                    for point in cluster.get("key_points"):
+                        summary += f"- {point}\n"
+                
+                # Incluir riscos e oportunidades
+                if cluster.get("sector_specific"):
+                    risks = cluster.get("sector_specific", {}).get("risks", [])
+                    opportunities = cluster.get("sector_specific", {}).get("opportunities", [])
+                    
+                    if risks:
+                        summary += "\nRisks:\n"
+                        for risk in risks:
+                            summary += f"- {risk}\n"
+                    
+                    if opportunities:
+                        summary += "\nOpportunities:\n"
+                        for opportunity in opportunities:
+                            summary += f"- {opportunity}\n"
+                
+                # Atualizar a trend existente
+                trends_coll.update_one(
+                    {"_id": existing_trend["_id"]},
+                    {"$set": {
+                        "title": cluster.get("theme", "Untitled Trend"),
+                        "posts": len(cluster.get("posts_ids", [])),
+                        "summary": summary,
+                        "lastUpdated": last_updated,
+                        "updated_at": datetime.utcnow(),
+                        "postIds": cluster.get("posts_ids", []),
+                        "key_points": cluster.get("key_points", []),
+                        "relevance_score": cluster.get("relevance_score", 0),
+                        "dispersion_score": cluster.get("dispersion_score", 0),
+                        "stakeholder_impact": cluster.get("stakeholder_impact", ""),
+                        "sector_specific": cluster.get("sector_specific", {"opportunities": [], "risks": []})
+                    }}
+                )
+                updated_trend_count += 1
+                logger.info(f"[TRENDS] Trend atualizada: '{cluster.get('theme', 'Untitled Trend')}' com {len(cluster.get('posts_ids', []))} posts")
+        
+        logger.info(f"[TRENDS] Total de {updated_trend_count} trends atualizadas")
+        
+        # 2. CRIAR NOVAS TRENDS PARA CLUSTERS SEM TRENDS
+        logger.info("[TRENDS] Buscando clusters processados sem trends associadas")
+        
+        # Usar aggregation para encontrar clusters que não têm trends associadas
+        pipeline = [
+            # Match para encontrar clusters processados com relevância adequada
+            {"$match": {
+                "was_processed": True,
+                "relevance_score": {"$gte": 0.2}
+            }},
+            # Lookup para verificar se existem trends para estes clusters
+            {"$lookup": {
+                "from": "trends",
+                "localField": "_id",
+                "foreignField": "cluster_id",
+                "as": "existing_trends"
+            }},
+            # Filtrar apenas clusters sem trends
+            {"$match": {"existing_trends": {"$size": 0}}},
+            # Projetar apenas os campos necessários
+            {"$project": {
+                "_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
+                "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
+                "stakeholder_impact": 1, "sector_specific": 1
+            }}
+        ]
+        
+        new_clusters = list(clusters_coll.aggregate(pipeline))
+        logger.info(f"[TRENDS] Encontrados {len(new_clusters)} clusters sem trends associadas")
+        
+        # Criar novas trends para esses clusters
+        new_trends = []
+        
+        for cluster in new_clusters:
             try:
                 # Determinar a categoria
                 category = "Technology"
@@ -96,7 +200,7 @@ def generate_trends_from_clusters():
                                 newest_date = datetime.now()
                     last_updated = format_time_ago(newest_date)
                 
-                #buld summary based on key ponits, risks and opportunities, format nicely
+                # Construir summary completo
                 summary = cluster.get("summary", "")
                 if not summary:
                     logger.warning(f"[TRENDS] Cluster {cluster['_id']} não possui resumo")
@@ -141,24 +245,36 @@ def generate_trends_from_clusters():
                     "created_at": datetime.utcnow()
                 }
                 
-                trends.append(trend)
-                logger.info(f"[TRENDS] Trend '{trend['title']}' criada com {trend['posts']} posts")
+                new_trends.append(trend)
+                logger.info(f"[TRENDS] Nova trend criada: '{trend['title']}' com {trend['posts']} posts")
                 
             except Exception as e:
                 logger.error(f"[TRENDS] ERRO ao processar cluster {cluster['_id']}: {str(e)}")
                 logger.error(f"[TRENDS] Traceback: {traceback.format_exc()}")
                 # Continua para o próximo cluster mesmo se houver erro
         
-        # Inserir trends no banco de dados
-        if trends:
-            logger.info(f"[TRENDS] Inserindo {len(trends)} trends na coleção")
-            insert_result = trends_coll.insert_many(trends)
-            logger.info(f"[TRENDS] {len(insert_result.inserted_ids)} trends inseridas com sucesso")
+        # Inserir novas trends no banco de dados
+        if new_trends:
+            logger.info(f"[TRENDS] Inserindo {len(new_trends)} novas trends na coleção")
+            insert_result = trends_coll.insert_many(new_trends)
+            logger.info(f"[TRENDS] {len(insert_result.inserted_ids)} novas trends inseridas com sucesso")
         else:
-            logger.warning("[TRENDS] Nenhuma trend foi criada para inserção")
+            logger.warning("[TRENDS] Nenhuma nova trend foi criada para inserção")
         
-        logger.info("[TRENDS] Geração de trends concluída com sucesso")
-        return len(trends)
+        # 3. RESETAR FLAG WAS_UPDATED NOS CLUSTERS PROCESSADOS
+        logger.info("[TRENDS] Resetando flag was_updated em clusters processados")
+        update_result = clusters_coll.update_many(
+            {"was_updated": True},
+            {"$set": {"was_updated": False}}
+        )
+        logger.info(f"[TRENDS] Flag was_updated resetada em {update_result.modified_count} clusters")
+        
+        # RESULTADOS
+        total_trends = updated_trend_count + len(new_trends)
+        logger.info("[TRENDS] Geração e atualização de trends concluída com sucesso")
+        logger.info(f"[TRENDS] Total: {total_trends} trends ({updated_trend_count} atualizadas, {len(new_trends)} novas)")
+        
+        return total_trends
     
     except Exception as e:
         logger.error(f"[TRENDS] ERRO CRÍTICO durante geração de trends: {str(e)}")

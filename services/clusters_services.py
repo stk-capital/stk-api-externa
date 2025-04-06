@@ -169,12 +169,17 @@ def clustering_posts():
                     {"_id": update_info["cluster_id"]},
                     {"$set": {
                         "posts_ids": update_info["posts_ids"],
-                        "was_processed": update_info["was_processed"]
+                        "was_processed": False,
+                        "was_updated": True  # Marca que o cluster foi atualizado
                     }}
                 )
             
         # Inserir novos clusters
         if clusters_to_insert:
+            # Adicionar flag was_updated em cada novo cluster
+            for cluster in clusters_to_insert:
+                cluster["was_updated"] = False
+                
             logger.info(f"[CLUSTERING] Inserindo {len(clusters_to_insert)} novos clusters no MongoDB")
             insert_result = clusters_coll.insert_many(clusters_to_insert)
             logger.info(f"[CLUSTERING] {len(insert_result.inserted_ids)} novos clusters inseridos com sucesso")
@@ -345,6 +350,7 @@ def process_clusters():
                         # Preparar objeto de atualização com todos os campos do resultado
                         update_data = {
                             "was_processed": True,
+                              # Marca que o cluster foi atualizado/processado
                             "summary": analysis.get("summary", ""),
                             "theme": analysis.get("theme", ""),
                             "key_points": analysis.get("key_points", []),
