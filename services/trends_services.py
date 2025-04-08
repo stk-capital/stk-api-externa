@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 from bson.objectid import ObjectId
 import re
 import traceback
+import time
+import pymongo
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +45,15 @@ def generate_trends_from_clusters():
     Gera e atualiza trends a partir dos clusters processados:
     1. Atualiza trends existentes para clusters marcados com was_updated=True
     2. Cria novas trends para clusters processados que ainda não têm trends associadas
+    
+    Otimizações implementadas:
+    - Utiliza bulk_write para atualizar todas as trends de uma só vez
+    - Usa pipeline de agregação eficiente para encontrar clusters sem trends
+    - Processamento otimizado para grandes volumes de dados
     """
     logger.info("[TRENDS] Iniciando geração e atualização de trends a partir de clusters...")
+    
+    start_time = time.time()
     
     try:
         # Conectar às coleções
@@ -74,19 +84,30 @@ def generate_trends_from_clusters():
         #limit the len(users_ids) to 100
         updated_clusters = [cluster for cluster in updated_clusters if len(cluster.get("users_ids", [])) <= 100]
         
-        
         logger.info(f"[TRENDS] Encontrados {len(updated_clusters)} clusters atualizados para verificar")
         
-        updated_trend_count = 0
+        # Buscar todas as trends existentes para os clusters atualizados em uma só consulta
+        if updated_clusters:
+            cluster_ids = [str(cluster["_id"]) for cluster in updated_clusters]
+            existing_trends = list(trends_coll.find({"cluster_id": {"$in": cluster_ids}}))
+            
+            # Criar mapa de cluster_id para trend para acesso rápido
+            trend_by_cluster_id = {trend["cluster_id"]: trend for trend in existing_trends}
+            logger.info(f"[TRENDS] Encontradas {len(existing_trends)} trends existentes para atualizar")
+        else:
+            trend_by_cluster_id = {}
+        
+        # Preparar operações em lote para atualização
+        update_operations = []
+        updated_cluster_count = 0
         
         for cluster in updated_clusters:
             cluster_id = str(cluster["_id"])
             
-            # Buscar trend existente para este cluster
-            existing_trend = trends_coll.find_one({"cluster_id": cluster_id})
-            
-            if existing_trend:
-                logger.info(f"[TRENDS] Atualizando trend existente para cluster: {cluster_id}")
+            # Verificar se existe trend para este cluster
+            if cluster_id in trend_by_cluster_id:
+                existing_trend = trend_by_cluster_id[cluster_id]
+                logger.info(f"[TRENDS] Preparando atualização para trend do cluster: {cluster_id}")
                 
                 # Formatar data de última atualização
                 last_updated = "recently"
@@ -129,32 +150,45 @@ def generate_trends_from_clusters():
                         for opportunity in opportunities:
                             summary += f"- {opportunity}\n"
                 
-                # Atualizar a trend existente
-                trends_coll.update_one(
-                    {"_id": existing_trend["_id"]},
-                    {"$set": {
-                        "title": cluster.get("theme", "Untitled Trend"),
-                        "posts": len(cluster.get("posts_ids", [])),
-                        "summary": summary,
-                        "lastUpdated": last_updated,
-                        "updated_at": datetime.utcnow(),
-                        "postIds": cluster.get("posts_ids", []),
-                        "key_points": cluster.get("key_points", []),
-                        "relevance_score": cluster.get("relevance_score", 0),
-                        "dispersion_score": cluster.get("dispersion_score", 0),
-                        "stakeholder_impact": cluster.get("stakeholder_impact", ""),
-                        "sector_specific": cluster.get("sector_specific", {"opportunities": [], "risks": []})
-                    }}
+                # Adicionar operação de atualização ao lote
+                update_operations.append(
+                    pymongo.UpdateOne(
+                        {"_id": existing_trend["_id"]},
+                        {"$set": {
+                            "title": cluster.get("theme", "Untitled Trend"),
+                            "posts": len(cluster.get("posts_ids", [])),
+                            "summary": summary,
+                            "lastUpdated": last_updated,
+                            "updated_at": cluster.get("newest_post_date", datetime.utcnow()),
+                            "postIds": cluster.get("posts_ids", []),
+                            "key_points": cluster.get("key_points", []),
+                            "relevance_score": cluster.get("relevance_score", 0),
+                            "dispersion_score": cluster.get("dispersion_score", 0),
+                            "stakeholder_impact": cluster.get("stakeholder_impact", ""),
+                            "sector_specific": cluster.get("sector_specific", {"opportunities": [], "risks": []})
+                        }}
+                    )
                 )
-                updated_trend_count += 1
-                logger.info(f"[TRENDS] Trend atualizada: '{cluster.get('theme', 'Untitled Trend')}' com {len(cluster.get('posts_ids', []))} posts")
+                updated_cluster_count += 1
+                logger.info(f"[TRENDS] Trend preparada para atualização: '{cluster.get('theme', 'Untitled Trend')}' com {len(cluster.get('posts_ids', []))} posts")
         
-        logger.info(f"[TRENDS] Total de {updated_trend_count} trends atualizadas")
+        # Executar todas as atualizações em lote
+        if update_operations:
+            start_update_time = time.time()
+            logger.info(f"[TRENDS] Executando atualização em lote para {len(update_operations)} trends")
+            update_result = trends_coll.bulk_write(update_operations)
+            update_time = time.time() - start_update_time
+            
+            logger.info(f"[TRENDS] Atualização em lote concluída em {update_time:.2f} segundos")
+            logger.info(f"[TRENDS] Trends atualizadas: {update_result.modified_count}")
+        else:
+            logger.info("[TRENDS] Nenhuma trend para atualizar")
         
         # 2. CRIAR NOVAS TRENDS PARA CLUSTERS SEM TRENDS
         logger.info("[TRENDS] Buscando clusters processados sem trends associadas")
         
         # Usar aggregation para encontrar clusters que não têm trends associadas
+        start_query_time = time.time()
         pipeline = [
             # Match para encontrar clusters processados com relevância adequada
             {"$match": {
@@ -179,9 +213,10 @@ def generate_trends_from_clusters():
         ]
         
         new_clusters = list(clusters_coll.aggregate(pipeline))
-        logger.info(f"[TRENDS] Encontrados {len(new_clusters)} clusters sem trends associadas")
+        query_time = time.time() - start_query_time
+        logger.info(f"[TRENDS] Encontrados {len(new_clusters)} clusters sem trends associadas em {query_time:.2f} segundos")
         
-        # Criar novas trends para esses clusters
+        # Preparar novas trends para inserção em lote
         new_trends = []
         
         for cluster in new_clusters:
@@ -250,39 +285,60 @@ def generate_trends_from_clusters():
                 }
                 
                 new_trends.append(trend)
-                logger.info(f"[TRENDS] Nova trend criada: '{trend['title']}' com {trend['posts']} posts")
+                logger.info(f"[TRENDS] Nova trend preparada: '{trend['title']}' com {trend['posts']} posts")
                 
             except Exception as e:
                 logger.error(f"[TRENDS] ERRO ao processar cluster {cluster['_id']}: {str(e)}")
                 logger.error(f"[TRENDS] Traceback: {traceback.format_exc()}")
                 # Continua para o próximo cluster mesmo se houver erro
         
-        # Inserir novas trends no banco de dados
+        # Inserir novas trends no banco de dados em lote
         if new_trends:
+            start_insert_time = time.time()
             logger.info(f"[TRENDS] Inserindo {len(new_trends)} novas trends na coleção")
             insert_result = trends_coll.insert_many(new_trends)
-            logger.info(f"[TRENDS] {len(insert_result.inserted_ids)} novas trends inseridas com sucesso")
+            insert_time = time.time() - start_insert_time
+            
+            logger.info(f"[TRENDS] {len(insert_result.inserted_ids)} novas trends inseridas com sucesso em {insert_time:.2f} segundos")
         else:
             logger.warning("[TRENDS] Nenhuma nova trend foi criada para inserção")
         
-        # 3. RESETAR FLAG WAS_UPDATED NOS CLUSTERS PROCESSADOS
+        # 3. RESETAR FLAG WAS_UPDATED NOS CLUSTERS PROCESSADOS EM LOTE
         logger.info("[TRENDS] Resetando flag was_updated em clusters processados")
+        reset_start_time = time.time()
         update_result = clusters_coll.update_many(
             {"was_updated": True},
             {"$set": {"was_updated": False}}
         )
-        logger.info(f"[TRENDS] Flag was_updated resetada em {update_result.modified_count} clusters")
+        reset_time = time.time() - reset_start_time
+        logger.info(f"[TRENDS] Flag was_updated resetada em {update_result.modified_count} clusters em {reset_time:.2f} segundos")
         
         # RESULTADOS
-        total_trends = updated_trend_count + len(new_trends)
-        logger.info("[TRENDS] Geração e atualização de trends concluída com sucesso")
-        logger.info(f"[TRENDS] Total: {total_trends} trends ({updated_trend_count} atualizadas, {len(new_trends)} novas)")
+        total_trends = updated_cluster_count + len(new_trends)
+        total_time = time.time() - start_time
+        minutes = int(total_time // 60)
+        seconds = total_time % 60
         
-        return total_trends
+        logger.info(f"[TRENDS] Geração e atualização de trends concluída em {minutes} minutos e {seconds:.2f} segundos")
+        logger.info(f"[TRENDS] Total: {total_trends} trends ({updated_cluster_count} atualizadas, {len(new_trends)} novas)")
+        
+        return {
+            "total": total_trends,
+            "updated": updated_cluster_count,
+            "new": len(new_trends),
+            "elapsed_time": total_time
+        }
     
     except Exception as e:
         logger.error(f"[TRENDS] ERRO CRÍTICO durante geração de trends: {str(e)}")
         logger.error(f"[TRENDS] Traceback completo: {traceback.format_exc()}")
+        
+        # Calcular tempo mesmo em caso de erro
+        total_time = time.time() - start_time
+        minutes = int(total_time // 60)
+        seconds = total_time % 60
+        logger.error(f"[TRENDS] Processo falhou após {minutes} minutos e {seconds:.2f} segundos")
+        
         # Re-lançar exceção para que seja tratada na função update_trends
         raise
 
@@ -296,15 +352,15 @@ def update_trends():
     
     try:
         logger.info("[TRENDS-UPDATE] Chamando função generate_trends_from_clusters")
-        num_trends = generate_trends_from_clusters()
+        trends_info = generate_trends_from_clusters()
         
         execution_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"[TRENDS-UPDATE] Trends atualizadas com sucesso. {num_trends} trends geradas em {execution_time:.2f} segundos")
+        logger.info(f"[TRENDS-UPDATE] Trends atualizadas com sucesso. {trends_info['total']} trends geradas em {execution_time:.2f} segundos")
         
         return {
             "success": True, 
-            "message": f"Trends atualizadas com sucesso. {num_trends} trends geradas.",
-            "trends_count": num_trends,
+            "message": f"Trends atualizadas com sucesso. {trends_info['total']} trends geradas.",
+            "trends_count": trends_info['total'],
             "execution_time_seconds": execution_time
         }
     except Exception as e:
