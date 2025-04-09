@@ -168,6 +168,6 @@ def _process_emails(n: int = 10):
     """
     End-to-end email processing: retrieve emails, filter, chunk, and prepare for info association.
     """
-    get_last_n_emails(n=10)
+    get_last_n_emails(n=n)
     filter_emails()
     chunkenize_emails()

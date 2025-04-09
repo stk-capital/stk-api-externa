@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import uuid
 
@@ -18,6 +18,7 @@ class Cluster(BaseModel):
     label: int = Field(default=-1)
     was_processed: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.now)
+    embedding: Optional[List[float]] = Field(default=None)
 
     def add_post(self, post_id):
         self.posts_ids.append(post_id)
