@@ -8,6 +8,9 @@ import traceback
 import time
 import pymongo
 import json
+from concurrent.futures import ThreadPoolExecutor
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,216 @@ def format_time_ago(date):
         return f"{minutes} {'minute' if minutes == 1 else 'minutes'} ago"
     else:
         return "just now"
+
+
+def reorganizar_trends_posts(max_workers=20, batch_size=100):
+    """
+    Percorre todas as trends da coleção, reordena os posts com o mais recente primeiro,
+    e atualiza o campo updated_at para a data do post mais recente.
+    
+    Todas as operações são paralelizadas para maximizar a eficiência.
+    
+    Args:
+        max_workers (int): Número máximo de workers para paralelização (default: 20)
+        batch_size (int): Tamanho do lote de trends para processar por vez (default: 100)
+        
+    Returns:
+        dict: Estatísticas de processamento (total de trends, sucessos, erros, tempo)
+    """
+    logger.info(f"[TRENDS-REORGANIZAR] Iniciando reorganização de posts nas trends (max_workers={max_workers})")
+    start_time = time.time()
+    
+    try:
+        # Conectar às coleções
+        trends_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="trends")
+        posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
+        
+        # Contar total de trends para processar
+        total_trends = trends_coll.count_documents({})
+        logger.info(f"[TRENDS-REORGANIZAR] Encontradas {total_trends} trends para processar")
+        
+        if total_trends == 0:
+            logger.info("[TRENDS-REORGANIZAR] Nenhuma trend para processar")
+            return {"total": 0, "success": 0, "errors": 0, "elapsed_time": 0}
+        
+        # Contadores para estatísticas
+        processed_count = 0
+        error_count = 0
+        update_count = 0
+        
+        # Processar trends em lotes para gerenciar memória
+        offset = 0
+        
+        while offset < total_trends:
+            # Buscar lote de trends
+            logger.info(f"[TRENDS-REORGANIZAR] Processando lote de trends ({offset} a {offset + batch_size})")
+            batch = list(trends_coll.find({}).skip(offset).limit(batch_size))
+            
+            if not batch:
+                break
+                
+            # Coletar todos os post_ids de todas as trends no lote para uma única consulta
+            all_post_ids = []
+            post_id_to_trend_map = {}  # Mapear post_id -> lista de trend_ids
+            
+            for trend in batch:
+                trend_id = trend["_id"]
+                post_ids = trend.get("postIds", [])
+                
+                if not post_ids:
+                    logger.warning(f"[TRENDS-REORGANIZAR] Trend {trend_id} não tem posts")
+                    continue
+                
+                # Converter para ObjectId para consulta
+                for post_id in post_ids:
+                    try:
+                        obj_id = ObjectId(post_id)
+                        all_post_ids.append(obj_id)
+                        
+                        # Mapear este post_id para esta trend
+                        if post_id not in post_id_to_trend_map:
+                            post_id_to_trend_map[post_id] = []
+                        post_id_to_trend_map[post_id].append(trend_id)
+                    except Exception as e:
+                        logger.warning(f"[TRENDS-REORGANIZAR] ID de post inválido: {post_id}, erro: {e}")
+            
+            # Remover duplicatas - um post pode estar em múltiplas trends
+            unique_post_ids = list(set(all_post_ids))
+            if not unique_post_ids:
+                logger.warning(f"[TRENDS-REORGANIZAR] Nenhum ID de post válido encontrado no lote atual")
+                offset += batch_size
+                continue
+            
+            # Buscar todos os posts com datas em uma única consulta
+            logger.info(f"[TRENDS-REORGANIZAR] Buscando {len(unique_post_ids)} posts únicos")
+            posts_with_dates = list(posts_coll.find(
+                {"_id": {"$in": unique_post_ids}},
+                {"_id": 1, "created_at": 1}
+            ))
+            
+            # Criar dicionário post_id -> created_at
+            post_dates = {}
+            for post in posts_with_dates:
+                post_id = str(post["_id"])
+                created_at = post.get("created_at")
+                if created_at:
+                    post_dates[post_id] = created_at
+            
+            logger.info(f"[TRENDS-REORGANIZAR] Obtidas datas para {len(post_dates)} posts")
+            
+            # Organizar posts por trend e ordenar
+            trends_data = {}
+            for trend in batch:
+                trend_id = trend["_id"]
+                post_ids = trend.get("postIds", [])
+                
+                # Filtrar apenas posts que temos data
+                valid_posts = [(pid, post_dates.get(pid)) for pid in post_ids if pid in post_dates]
+                
+                if not valid_posts:
+                    logger.warning(f"[TRENDS-REORGANIZAR] Trend {trend_id} não tem posts com datas válidas")
+                    continue
+                
+                # Ordenar posts por data (mais recente primeiro)
+                sorted_posts = sorted(valid_posts, key=lambda x: x[1] if x[1] else datetime.min, reverse=True)
+                
+                # Pegar IDs ordenados e a data mais recente
+                ordered_post_ids = [p[0] for p in sorted_posts]
+                newest_date = sorted_posts[0][1] if sorted_posts else None
+                
+                # Armazenar para atualização
+                trends_data[trend_id] = {
+                    "ordered_post_ids": ordered_post_ids,
+                    "newest_date": newest_date
+                }
+            
+            # Função para processar cada trend em paralelo
+            def process_trend(trend_id):
+                try:
+                    if trend_id not in trends_data:
+                        return {"success": False, "trend_id": trend_id, "reason": "No data"}
+                    
+                    data = trends_data[trend_id]
+                    ordered_post_ids = data["ordered_post_ids"]
+                    newest_date = data["newest_date"]
+                    
+                    # Criar operação de atualização
+                    update_fields = {
+                        "postIds": ordered_post_ids
+                    }
+                    
+                    # Atualizar updated_at apenas se temos data do post mais recente
+                    if newest_date:
+                        update_fields["updated_at"] = newest_date
+                    
+                    # Calcular tempo relativo para o campo lastUpdated (ex: "2 hours ago")
+                    if newest_date:
+                        update_fields["lastUpdated"] = format_time_ago(newest_date)
+                    
+                    # Executar atualização
+                    result = trends_coll.update_one(
+                        {"_id": trend_id},
+                        {"$set": update_fields}
+                    )
+                    
+                    return {
+                        "success": result.modified_count > 0,
+                        "trend_id": trend_id,
+                        "modified": result.modified_count
+                    }
+                except Exception as e:
+                    logger.error(f"[TRENDS-REORGANIZAR] Erro ao processar trend {trend_id}: {str(e)}")
+                    return {"success": False, "trend_id": trend_id, "error": str(e)}
+            
+            # Processar trends em paralelo
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                trend_ids = list(trends_data.keys())
+                results = list(executor.map(process_trend, trend_ids))
+            
+            # Processar resultados
+            batch_success = sum(1 for r in results if r.get("success", False))
+            batch_errors = len(results) - batch_success
+            
+            processed_count += len(results)
+            update_count += batch_success
+            error_count += batch_errors
+            
+            logger.info(f"[TRENDS-REORGANIZAR] Lote processado: {batch_success} trends atualizadas, {batch_errors} erros")
+            
+            # Avançar para o próximo lote
+            offset += batch_size
+        
+        # Calcular estatísticas finais
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        minutes = int(elapsed_time // 60)
+        seconds = elapsed_time % 60
+        
+        logger.info(f"[TRENDS-REORGANIZAR] Processamento concluído em {minutes}m {seconds:.2f}s")
+        logger.info(f"[TRENDS-REORGANIZAR] Total processado: {processed_count} trends")
+        logger.info(f"[TRENDS-REORGANIZAR] Atualizadas com sucesso: {update_count} trends")
+        logger.info(f"[TRENDS-REORGANIZAR] Erros: {error_count} trends")
+        
+        return {
+            "total": total_trends,
+            "processed": processed_count,
+            "success": update_count,
+            "errors": error_count,
+            "elapsed_time": elapsed_time
+        }
+    
+    except Exception as e:
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.error(f"[TRENDS-REORGANIZAR] ERRO CRÍTICO: {str(e)}")
+        logger.error(f"[TRENDS-REORGANIZAR] Traceback: {traceback.format_exc()}")
+        
+        return {
+            "success": False,
+            "error": str(e),
+            "elapsed_time": elapsed_time
+        }
+
 
 def generate_trends_from_clusters():
     """
@@ -380,211 +593,3 @@ def update_trends():
         } 
     
 
-
-def reorganizar_trends_posts(max_workers=20, batch_size=100):
-    """
-    Percorre todas as trends da coleção, reordena os posts com o mais recente primeiro,
-    e atualiza o campo updated_at para a data do post mais recente.
-    
-    Todas as operações são paralelizadas para maximizar a eficiência.
-    
-    Args:
-        max_workers (int): Número máximo de workers para paralelização (default: 20)
-        batch_size (int): Tamanho do lote de trends para processar por vez (default: 100)
-        
-    Returns:
-        dict: Estatísticas de processamento (total de trends, sucessos, erros, tempo)
-    """
-    logger.info(f"[TRENDS-REORGANIZAR] Iniciando reorganização de posts nas trends (max_workers={max_workers})")
-    start_time = time.time()
-    
-    try:
-        # Conectar às coleções
-        trends_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="trends")
-        posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
-        
-        # Contar total de trends para processar
-        total_trends = trends_coll.count_documents({})
-        logger.info(f"[TRENDS-REORGANIZAR] Encontradas {total_trends} trends para processar")
-        
-        if total_trends == 0:
-            logger.info("[TRENDS-REORGANIZAR] Nenhuma trend para processar")
-            return {"total": 0, "success": 0, "errors": 0, "elapsed_time": 0}
-        
-        # Contadores para estatísticas
-        processed_count = 0
-        error_count = 0
-        update_count = 0
-        
-        # Processar trends em lotes para gerenciar memória
-        offset = 0
-        
-        while offset < total_trends:
-            # Buscar lote de trends
-            logger.info(f"[TRENDS-REORGANIZAR] Processando lote de trends ({offset} a {offset + batch_size})")
-            batch = list(trends_coll.find({}).skip(offset).limit(batch_size))
-            
-            if not batch:
-                break
-                
-            # Coletar todos os post_ids de todas as trends no lote para uma única consulta
-            all_post_ids = []
-            post_id_to_trend_map = {}  # Mapear post_id -> lista de trend_ids
-            
-            for trend in batch:
-                trend_id = trend["_id"]
-                post_ids = trend.get("postIds", [])
-                
-                if not post_ids:
-                    logger.warning(f"[TRENDS-REORGANIZAR] Trend {trend_id} não tem posts")
-                    continue
-                
-                # Converter para ObjectId para consulta
-                for post_id in post_ids:
-                    try:
-                        obj_id = ObjectId(post_id)
-                        all_post_ids.append(obj_id)
-                        
-                        # Mapear este post_id para esta trend
-                        if post_id not in post_id_to_trend_map:
-                            post_id_to_trend_map[post_id] = []
-                        post_id_to_trend_map[post_id].append(trend_id)
-                    except Exception as e:
-                        logger.warning(f"[TRENDS-REORGANIZAR] ID de post inválido: {post_id}, erro: {e}")
-            
-            # Remover duplicatas - um post pode estar em múltiplas trends
-            unique_post_ids = list(set(all_post_ids))
-            if not unique_post_ids:
-                logger.warning(f"[TRENDS-REORGANIZAR] Nenhum ID de post válido encontrado no lote atual")
-                offset += batch_size
-                continue
-            
-            # Buscar todos os posts com datas em uma única consulta
-            logger.info(f"[TRENDS-REORGANIZAR] Buscando {len(unique_post_ids)} posts únicos")
-            posts_with_dates = list(posts_coll.find(
-                {"_id": {"$in": unique_post_ids}},
-                {"_id": 1, "created_at": 1}
-            ))
-            
-            # Criar dicionário post_id -> created_at
-            post_dates = {}
-            for post in posts_with_dates:
-                post_id = str(post["_id"])
-                created_at = post.get("created_at")
-                if created_at:
-                    post_dates[post_id] = created_at
-            
-            logger.info(f"[TRENDS-REORGANIZAR] Obtidas datas para {len(post_dates)} posts")
-            
-            # Organizar posts por trend e ordenar
-            trends_data = {}
-            for trend in batch:
-                trend_id = trend["_id"]
-                post_ids = trend.get("postIds", [])
-                
-                # Filtrar apenas posts que temos data
-                valid_posts = [(pid, post_dates.get(pid)) for pid in post_ids if pid in post_dates]
-                
-                if not valid_posts:
-                    logger.warning(f"[TRENDS-REORGANIZAR] Trend {trend_id} não tem posts com datas válidas")
-                    continue
-                
-                # Ordenar posts por data (mais recente primeiro)
-                sorted_posts = sorted(valid_posts, key=lambda x: x[1] if x[1] else datetime.min, reverse=True)
-                
-                # Pegar IDs ordenados e a data mais recente
-                ordered_post_ids = [p[0] for p in sorted_posts]
-                newest_date = sorted_posts[0][1] if sorted_posts else None
-                
-                # Armazenar para atualização
-                trends_data[trend_id] = {
-                    "ordered_post_ids": ordered_post_ids,
-                    "newest_date": newest_date
-                }
-            
-            # Função para processar cada trend em paralelo
-            def process_trend(trend_id):
-                try:
-                    if trend_id not in trends_data:
-                        return {"success": False, "trend_id": trend_id, "reason": "No data"}
-                    
-                    data = trends_data[trend_id]
-                    ordered_post_ids = data["ordered_post_ids"]
-                    newest_date = data["newest_date"]
-                    
-                    # Criar operação de atualização
-                    update_fields = {
-                        "postIds": ordered_post_ids
-                    }
-                    
-                    # Atualizar updated_at apenas se temos data do post mais recente
-                    if newest_date:
-                        update_fields["updated_at"] = newest_date
-                    
-                    # Calcular tempo relativo para o campo lastUpdated (ex: "2 hours ago")
-                    if newest_date:
-                        update_fields["lastUpdated"] = format_time_ago(newest_date)
-                    
-                    # Executar atualização
-                    result = trends_coll.update_one(
-                        {"_id": trend_id},
-                        {"$set": update_fields}
-                    )
-                    
-                    return {
-                        "success": result.modified_count > 0,
-                        "trend_id": trend_id,
-                        "modified": result.modified_count
-                    }
-                except Exception as e:
-                    logger.error(f"[TRENDS-REORGANIZAR] Erro ao processar trend {trend_id}: {str(e)}")
-                    return {"success": False, "trend_id": trend_id, "error": str(e)}
-            
-            # Processar trends em paralelo
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                trend_ids = list(trends_data.keys())
-                results = list(executor.map(process_trend, trend_ids))
-            
-            # Processar resultados
-            batch_success = sum(1 for r in results if r.get("success", False))
-            batch_errors = len(results) - batch_success
-            
-            processed_count += len(results)
-            update_count += batch_success
-            error_count += batch_errors
-            
-            logger.info(f"[TRENDS-REORGANIZAR] Lote processado: {batch_success} trends atualizadas, {batch_errors} erros")
-            
-            # Avançar para o próximo lote
-            offset += batch_size
-        
-        # Calcular estatísticas finais
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        minutes = int(elapsed_time // 60)
-        seconds = elapsed_time % 60
-        
-        logger.info(f"[TRENDS-REORGANIZAR] Processamento concluído em {minutes}m {seconds:.2f}s")
-        logger.info(f"[TRENDS-REORGANIZAR] Total processado: {processed_count} trends")
-        logger.info(f"[TRENDS-REORGANIZAR] Atualizadas com sucesso: {update_count} trends")
-        logger.info(f"[TRENDS-REORGANIZAR] Erros: {error_count} trends")
-        
-        return {
-            "total": total_trends,
-            "processed": processed_count,
-            "success": update_count,
-            "errors": error_count,
-            "elapsed_time": elapsed_time
-        }
-    
-    except Exception as e:
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        logger.error(f"[TRENDS-REORGANIZAR] ERRO CRÍTICO: {str(e)}")
-        logger.error(f"[TRENDS-REORGANIZAR] Traceback: {traceback.format_exc()}")
-        
-        return {
-            "success": False,
-            "error": str(e),
-            "elapsed_time": elapsed_time
-        }
