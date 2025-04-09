@@ -46,7 +46,7 @@ def format_time_ago(date):
 
 def reorganizar_trends_posts(max_workers=20, batch_size=100):
     """
-    Percorre todas as trends da coleção, reordena os posts com o mais recente primeiro,
+    Percorre as trends da coleção atualizadas no último dia, reordena os posts com o mais recente primeiro,
     e atualiza o campo updated_at para a data do post mais recente.
     
     Todas as operações são paralelizadas para maximizar a eficiência.
@@ -66,12 +66,16 @@ def reorganizar_trends_posts(max_workers=20, batch_size=100):
         trends_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="trends")
         posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
         
+        # Filtrar por trends atualizadas no último dia
+        data_limite = datetime.utcnow() - timedelta(days=1)
+        filtro_trends = {"updated_at": {"$gte": data_limite}}
+        
         # Contar total de trends para processar
-        total_trends = trends_coll.count_documents({})
-        logger.info(f"[TRENDS-REORGANIZAR] Encontradas {total_trends} trends para processar")
+        total_trends = trends_coll.count_documents(filtro_trends)
+        logger.info(f"[TRENDS-REORGANIZAR] Encontradas {total_trends} trends atualizadas no último dia para processar")
         
         if total_trends == 0:
-            logger.info("[TRENDS-REORGANIZAR] Nenhuma trend para processar")
+            logger.info("[TRENDS-REORGANIZAR] Nenhuma trend recente para processar")
             return {"total": 0, "success": 0, "errors": 0, "elapsed_time": 0}
         
         # Contadores para estatísticas
@@ -85,7 +89,7 @@ def reorganizar_trends_posts(max_workers=20, batch_size=100):
         while offset < total_trends:
             # Buscar lote de trends
             logger.info(f"[TRENDS-REORGANIZAR] Processando lote de trends ({offset} a {offset + batch_size})")
-            batch = list(trends_coll.find({}).skip(offset).limit(batch_size))
+            batch = list(trends_coll.find(filtro_trends).skip(offset).limit(batch_size))
             
             if not batch:
                 break
