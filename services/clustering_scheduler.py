@@ -6,7 +6,7 @@ import json
 
 # from services.posts_services import clustering_posts
 from services.clusters_services import process_clusters, clustering_posts
-from services.trends_services import update_trends
+from services.trends_services import update_trends, reorganizar_trends_posts
 from fastapi.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,10 @@ async def run_cluster_pipeline():
             logger.error(f"[CLUSTER-PIPELINE] ERRO durante update_trends: {str(e)}")
             logger.error(f"[CLUSTER-PIPELINE] Traceback: {traceback.format_exc()}")
             raise
-        
+        #add reorganizar_trends_posts and proper logging
+        logger.info("[CLUSTER-PIPELINE] Reorganizando trends...")
+        await run_in_threadpool(reorganizar_trends_posts)
+        logger.info("[CLUSTER-PIPELINE] Reorganização de trends concluída com sucesso")
         trends_time = (datetime.now() - start_time).total_seconds()
         logger.info(f"[CLUSTER-PIPELINE] Atualização de trends concluída em {trends_time:.2f} segundos")
         

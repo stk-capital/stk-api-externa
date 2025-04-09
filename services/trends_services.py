@@ -541,7 +541,7 @@ def generate_trends_from_clusters():
         
 
         # Reorganizar posts nas trends
-        reorganizar_trends_posts()
+        
 
         return {
             "total": total_trends,
