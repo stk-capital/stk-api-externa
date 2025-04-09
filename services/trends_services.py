@@ -322,6 +322,10 @@ def generate_trends_from_clusters():
         logger.info(f"[TRENDS] Geração e atualização de trends concluída em {minutes} minutos e {seconds:.2f} segundos")
         logger.info(f"[TRENDS] Total: {total_trends} trends ({updated_cluster_count} atualizadas, {len(new_trends)} novas)")
         
+
+        # Reorganizar posts nas trends
+        reorganizar_trends_posts()
+
         return {
             "total": total_trends,
             "updated": updated_cluster_count,
