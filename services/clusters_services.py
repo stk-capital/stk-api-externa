@@ -336,28 +336,28 @@ def verificar_clusters_existentes(clusters, clusters_coll):
             
             # Verificar o nível de similaridade para determinar a ação
             if similarity_score >= HIGH_SIMILARITY:
-                # Alta similaridade (85-100%) - apenas atualizar posts_ids, manter summary
+                # Alta similaridade (90-100%) - apenas atualizar posts_ids, manter summary E embedding
                 logger.info(f"[CLUSTERING] Cluster similar encontrado com alta similaridade ({match_percentage:.2f}%) - apenas atualizando posts")
                 return {
                     "action": "update",
                     "cluster_id": similar_cluster["_id"],
                     "posts_ids": merged_posts_ids,
                     "was_processed": True,  # Mantém o status processado para não refazer o summary
-                    "embedding": cluster.get("embedding"),
+                    # Não inclui o embedding para preservar o embedding existente
                     "similarity_score": similarity_score,
                     "similarity_level": "high",
                     "update_type": "merge_only",  # Novo flag indicando apenas mesclagem de posts
                     "newest_post_date": cluster.get("newest_post_date", datetime.now())
                 }
             else:
-                # Média similaridade (50-85%) - atualizar posts_ids e refazer summary
+                # Média similaridade (50-85%) - atualizar posts_ids, refazer summary e atualizar embedding posteriormente
                 logger.info(f"[CLUSTERING] Cluster similar encontrado com média similaridade ({match_percentage:.2f}%) - atualizando posts e marcando para reprocessamento")
                 return {
                     "action": "update",
                     "cluster_id": similar_cluster["_id"],
                     "posts_ids": merged_posts_ids,
                     "was_processed": False,  # Marca para reprocessamento
-                    "embedding": cluster.get("embedding"),
+                    "embedding": cluster.get("embedding"),  # Mantém o embedding temporariamente até reprocessamento
                     "similarity_score": similarity_score,
                     "similarity_level": "medium",
                     "update_type": "reprocess",  # Novo flag indicando necessidade de reprocessamento
@@ -386,9 +386,13 @@ def verificar_clusters_existentes(clusters, clusters_coll):
                 "posts_ids": result["posts_ids"],
                 "was_processed": result["was_processed"],
                 "update_type": result.get("update_type", "reprocess"),  # Default para compatibilidade
-                **({"embedding": result["embedding"]} if "embedding" in result else {}),
-                **({"newest_post_date": result["newest_post_date"]} if "newest_post_date" in result else {})
+                "newest_post_date": result.get("newest_post_date")
             }
+            
+            # Adicionar embedding apenas se presente no resultado E não for alta similaridade
+            if "embedding" in result:
+                update_info["embedding"] = result["embedding"]
+            
             clusters_to_update.append(update_info)
             
             # Contabilizar por nível de similaridade
@@ -513,9 +517,11 @@ def atualizar_clusters_existentes(clusters_to_update, clusters_coll, posts_coll=
                 "update_type": update_type  # Novo campo indicando o tipo de atualização
             }
             
-            # Adicionar embedding se disponível
-            if "embedding" in update_info:
+            # Adicionar embedding APENAS quando for um reprocessamento (média similaridade)
+            # Isso preserva o embedding existente para clusters de alta similaridade
+            if update_type == "reprocess" and "embedding" in update_info:
                 update_data["embedding"] = update_info["embedding"]
+                logger.info(f"[CLUSTERING] Atualizando embedding para cluster {update_info['cluster_id']} (tipo: reprocess)")
             
             # Adicionar newest_post_date se disponível
             if newest_date:
@@ -720,6 +726,8 @@ def process_clusters(max_workers=10, model_name="gemini-2.0-flash", max_tokens=1
     Seleciona clusters que precisam de processamento baseado em:
     1. Clusters nunca processados (was_processed=False)
     2. Clusters marcados para reprocessamento (update_type=reprocess)
+    
+    Após o processamento, atualiza os embeddings dos clusters baseados nos novos summaries.
     
     Parâmetros:
     - max_workers: Número máximo de workers para processamento paralelo (padrão: 5)
@@ -998,6 +1006,12 @@ def process_clusters(max_workers=10, model_name="gemini-2.0-flash", max_tokens=1
                 
                 logger.info(f"[PROCESSO-CLUSTERS] Atualização em lote concluída em {update_time:.2f} segundos")
                 logger.info(f"[PROCESSO-CLUSTERS] Clusters modificados: {result.modified_count}")
+                
+                # Após atualizar os clusters com summaries, gerar embeddings para eles
+                if result.modified_count > 0:
+                    logger.info("[PROCESSO-CLUSTERS] Iniciando geração de embeddings para clusters processados")
+                    embedding_result = gerar_embeddings_clusters()
+                    logger.info(f"[PROCESSO-CLUSTERS] Embeddings gerados para {embedding_result.get('processed', 0)} clusters")
             else:
                 logger.warning("[PROCESSO-CLUSTERS] Nenhuma operação de atualização para executar")
         

@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+## Principles
+1. Make sure you understand the requirements, ask questions before starting if you dont
+2. Minimal, efficient and elegant interventions 
+3. Taking advantage of reusable elements (reuse always reuse)
+4. Think about possible disruptions to the project and plan for that
+6. Don't Break any existing functionalities!!!
+5. Dont change styles, only when you are a sked for!!!
+6. Always right all code in english
