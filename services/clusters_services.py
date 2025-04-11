@@ -718,8 +718,9 @@ def clean_clusters():
 
 
 #process_clusters()
-def process_clusters(max_workers=10, model_name="gemini-2.0-flash", max_tokens=100000, timeout=200.0, temperature=1.0):
+def process_clusters(max_workers=10, model_name="gemini-2.5-pro-preview-03-25", max_tokens=100000, timeout=200.0, temperature=1.0):
     """
+
     Processa clusters não processados aplicando LLM em paralelo,
     enviando todos os prompts de uma vez para o serviço LLM.
     
