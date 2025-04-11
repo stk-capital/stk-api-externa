@@ -303,7 +303,7 @@ def verificar_clusters_existentes(clusters, clusters_coll):
     clusters_to_update = []
     
     # Definir thresholds de similaridade
-    HIGH_SIMILARITY = 0.85
+    HIGH_SIMILARITY = 0.9
     MEDIUM_SIMILARITY = 0.5
     
     # Função para processar um cluster em paralelo
