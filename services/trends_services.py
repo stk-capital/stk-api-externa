@@ -267,6 +267,7 @@ def generate_trends_from_clusters():
     - Utiliza bulk_write para atualizar todas as trends de uma só vez
     - Usa pipeline de agregação eficiente para encontrar clusters sem trends
     - Processamento otimizado para grandes volumes de dados
+    - Transfere embeddings dos clusters para as trends correspondentes
     """
     logger.info("[TRENDS] Iniciando geração e atualização de trends a partir de clusters...")
     
@@ -295,13 +296,15 @@ def generate_trends_from_clusters():
                 "_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
                 "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
                 "stakeholder_impact": 1, "sector_specific": 1,
-                "users_ids": 1
+                "users_ids": 1, "embedding": 1  # Adicionado campo embedding
             }
         ))
         #limit the len(users_ids) to 100
         updated_clusters = [cluster for cluster in updated_clusters if len(cluster.get("users_ids", [])) <= 100]
         
-        logger.info(f"[TRENDS] Encontrados {len(updated_clusters)} clusters atualizados para verificar")
+        # Contar clusters com embedding para log
+        clusters_with_embedding = sum(1 for cluster in updated_clusters if "embedding" in cluster)
+        logger.info(f"[TRENDS] Encontrados {len(updated_clusters)} clusters atualizados para verificar, {clusters_with_embedding} com embeddings")
         
         # Buscar todas as trends existentes para os clusters atualizados em uma só consulta
         if updated_clusters:
@@ -367,23 +370,31 @@ def generate_trends_from_clusters():
                         for opportunity in opportunities:
                             summary += f"- {opportunity}\n"
                 
+                # Preparar dados de atualização
+                update_data = {
+                    "title": cluster.get("theme", "Untitled Trend"),
+                    "posts": len(cluster.get("posts_ids", [])),
+                    "summary": summary,
+                    "lastUpdated": last_updated,
+                    "updated_at": cluster.get("newest_post_date", datetime.utcnow()),
+                    "postIds": cluster.get("posts_ids", []),
+                    "key_points": cluster.get("key_points", []),
+                    "relevance_score": cluster.get("relevance_score", 0),
+                    "dispersion_score": cluster.get("dispersion_score", 0),
+                    "stakeholder_impact": cluster.get("stakeholder_impact", ""),
+                    "sector_specific": cluster.get("sector_specific", {"opportunities": [], "risks": []})
+                }
+                
+                # Adicionar embedding apenas se estiver presente no cluster
+                if "embedding" in cluster and cluster["embedding"]:
+                    update_data["embedding"] = cluster["embedding"]
+                    logger.info(f"[TRENDS] Transferindo embedding para trend do cluster: {cluster_id}")
+                
                 # Adicionar operação de atualização ao lote
                 update_operations.append(
                     pymongo.UpdateOne(
                         {"_id": existing_trend["_id"]},
-                        {"$set": {
-                            "title": cluster.get("theme", "Untitled Trend"),
-                            "posts": len(cluster.get("posts_ids", [])),
-                            "summary": summary,
-                            "lastUpdated": last_updated,
-                            "updated_at": cluster.get("newest_post_date", datetime.utcnow()),
-                            "postIds": cluster.get("posts_ids", []),
-                            "key_points": cluster.get("key_points", []),
-                            "relevance_score": cluster.get("relevance_score", 0),
-                            "dispersion_score": cluster.get("dispersion_score", 0),
-                            "stakeholder_impact": cluster.get("stakeholder_impact", ""),
-                            "sector_specific": cluster.get("sector_specific", {"opportunities": [], "risks": []})
-                        }}
+                        {"$set": update_data}
                     )
                 )
                 updated_cluster_count += 1
@@ -410,7 +421,8 @@ def generate_trends_from_clusters():
             # Match para encontrar clusters processados com relevância adequada
             {"$match": {
                 "was_processed": True,
-                "relevance_score": {"$gte": 0.2}
+                "relevance_score": {"$gte": 0.2},
+                "embedding": {"$exists": True}  # Garantir que o cluster tenha embedding
             }},
             # Lookup para verificar se existem trends para estes clusters
             {"$lookup": {
@@ -425,19 +437,27 @@ def generate_trends_from_clusters():
             {"$project": {
                 "_id": 1, "theme": 1, "summary": 1, "posts_ids": 1, "key_points": 1, 
                 "relevance_score": 1, "dispersion_score": 1, "newest_post_date": 1,
-                "stakeholder_impact": 1, "sector_specific": 1
+                "stakeholder_impact": 1, "sector_specific": 1, "embedding": 1
             }}
         ]
         
         new_clusters = list(clusters_coll.aggregate(pipeline))
         query_time = time.time() - start_query_time
-        logger.info(f"[TRENDS] Encontrados {len(new_clusters)} clusters sem trends associadas em {query_time:.2f} segundos")
+        
+        # Contar clusters com embedding
+        clusters_with_embedding = sum(1 for cluster in new_clusters if "embedding" in cluster)
+        logger.info(f"[TRENDS] Encontrados {len(new_clusters)} clusters sem trends associadas em {query_time:.2f} segundos, {clusters_with_embedding} com embeddings")
         
         # Preparar novas trends para inserção em lote
         new_trends = []
         
         for cluster in new_clusters:
             try:
+                # Verificar se o cluster tem embedding antes de criar a trend
+                if "embedding" not in cluster or not cluster["embedding"]:
+                    logger.warning(f"[TRENDS] Cluster {cluster['_id']} não possui embedding, pulando criação de trend")
+                    continue
+                
                 # Determinar a categoria
                 category = "Technology"
                 
@@ -498,11 +518,12 @@ def generate_trends_from_clusters():
                     "stakeholder_impact": cluster.get("stakeholder_impact", ""),
                     "sector_specific": cluster.get("sector_specific", {"opportunities": [], "risks": []}),
                     "cluster_id": str(cluster["_id"]),
-                    "created_at": datetime.utcnow()
+                    "created_at": datetime.utcnow(),
+                    "embedding": cluster["embedding"]  # Transferir embedding para a trend
                 }
                 
                 new_trends.append(trend)
-                logger.info(f"[TRENDS] Nova trend preparada: '{trend['title']}' com {trend['posts']} posts")
+                logger.info(f"[TRENDS] Nova trend preparada com embedding: '{trend['title']}' com {trend['posts']} posts")
                 
             except Exception as e:
                 logger.error(f"[TRENDS] ERRO ao processar cluster {cluster['_id']}: {str(e)}")
@@ -596,4 +617,173 @@ def update_trends():
             "execution_time_seconds": execution_time
         } 
     
+
+def add_embedding_to_existing_trends(max_workers=20, batch_size=100):
+    """
+    Adiciona embeddings às trends existentes que ainda não possuem, buscando-os dos 
+    clusters associados.
+    
+    Observação: Os IDs de cluster são UUIDs armazenados como strings, não ObjectIds.
+    
+    Todas as operações são paralelizadas para maximizar a eficiência.
+    
+    Args:
+        max_workers (int): Número máximo de workers para paralelização (default: 20)
+        batch_size (int): Tamanho do lote de trends para processar por vez (default: 100)
+        
+    Returns:
+        dict: Estatísticas de processamento (total processado, sucessos, erros, tempo)
+    """
+    logger.info(f"[TRENDS-EMBEDDINGS] Iniciando adição de embeddings às trends existentes (max_workers={max_workers})")
+    start_time = time.time()
+    
+    try:
+        # Conectar às coleções
+        trends_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="trends")
+        clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
+        
+        # Buscar trends sem embeddings
+        query = {
+            "$or": [
+                {"embedding": {"$exists": False}},
+                {"embedding": None}
+            ],
+            "cluster_id": {"$exists": True, "$ne": ""}
+        }
+        
+        # Contar total de trends para processar
+        total_trends = trends_coll.count_documents(query)
+        logger.info(f"[TRENDS-EMBEDDINGS] Encontradas {total_trends} trends sem embeddings para processar")
+        
+        if total_trends == 0:
+            logger.info("[TRENDS-EMBEDDINGS] Nenhuma trend para processar")
+            return {"total": 0, "success": 0, "errors": 0, "elapsed_time": 0}
+        
+        # Contadores para estatísticas
+        processed_count = 0
+        error_count = 0
+        update_count = 0
+        
+        # Processar trends em lotes para gerenciar memória
+        offset = 0
+        
+        while offset < total_trends:
+            # Buscar lote de trends
+            logger.info(f"[TRENDS-EMBEDDINGS] Processando lote de trends ({offset} a {offset + batch_size})")
+            batch = list(trends_coll.find(query).skip(offset).limit(batch_size))
+            
+            if not batch:
+                break
+                
+            # Extrair cluster_ids de todas as trends no lote
+            cluster_ids = []
+            for trend in batch:
+                cluster_id = trend.get("cluster_id")
+                if cluster_id:
+                    cluster_ids.append(cluster_id)  # Mantém como string, sem tentar converter para ObjectId
+            
+            if not cluster_ids:
+                logger.warning(f"[TRENDS-EMBEDDINGS] Nenhum ID de cluster válido encontrado no lote atual")
+                offset += batch_size
+                continue
+            
+            # Buscar todos os clusters com embeddings em uma única consulta
+            # Os IDs no clusters estão no formato UUID armazenados como strings, não ObjectIds
+            logger.info(f"[TRENDS-EMBEDDINGS] Buscando {len(cluster_ids)} clusters associados")
+            clusters = list(clusters_coll.find(
+                {
+                    "_id": {"$in": cluster_ids},
+                    "embedding": {"$exists": True}
+                },
+                {"_id": 1, "embedding": 1}
+            ))
+            
+            # Criar dicionário cluster_id -> embedding para acesso rápido
+            cluster_embeddings = {}
+            for cluster in clusters:
+                cluster_id = cluster["_id"]  # Já é uma string
+                embedding = cluster.get("embedding")
+                if embedding:
+                    cluster_embeddings[cluster_id] = embedding
+            
+            logger.info(f"[TRENDS-EMBEDDINGS] Encontrados {len(cluster_embeddings)} clusters com embeddings válidos")
+            
+            # Função para processar cada trend em paralelo
+            def process_trend(trend):
+                try:
+                    trend_id = trend["_id"]
+                    cluster_id = trend.get("cluster_id")
+                    
+                    if not cluster_id:
+                        return {"success": False, "reason": "No cluster_id"}
+                    
+                    # Verificar se temos embedding para este cluster
+                    if cluster_id not in cluster_embeddings:
+                        return {"success": False, "reason": f"No embedding for cluster {cluster_id}"}
+                    
+                    # Obter embedding do cluster associado
+                    embedding = cluster_embeddings[cluster_id]
+                    
+                    # Atualizar a trend com o embedding
+                    result = trends_coll.update_one(
+                        {"_id": trend_id},
+                        {"$set": {"embedding": embedding}}
+                    )
+                    
+                    return {
+                        "success": result.modified_count > 0,
+                        "modified": result.modified_count
+                    }
+                except Exception as e:
+                    logger.error(f"[TRENDS-EMBEDDINGS] Erro ao processar trend {trend.get('_id')}: {str(e)}")
+                    return {"success": False, "error": str(e)}
+            
+            # Processar trends em paralelo
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                results = list(executor.map(process_trend, batch))
+            
+            # Processar resultados
+            batch_success = sum(1 for r in results if r.get("success", False))
+            batch_errors = len(results) - batch_success
+            
+            processed_count += len(results)
+            update_count += batch_success
+            error_count += batch_errors
+            
+            logger.info(f"[TRENDS-EMBEDDINGS] Lote processado: {batch_success} trends atualizadas, {batch_errors} erros")
+            
+            # Avançar para o próximo lote
+            offset += batch_size
+        
+        # Calcular estatísticas finais
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        minutes = int(elapsed_time // 60)
+        seconds = elapsed_time % 60
+        
+        logger.info(f"[TRENDS-EMBEDDINGS] Processamento concluído em {minutes}m {seconds:.2f}s")
+        logger.info(f"[TRENDS-EMBEDDINGS] Total processado: {processed_count} trends")
+        logger.info(f"[TRENDS-EMBEDDINGS] Atualizadas com sucesso: {update_count} trends")
+        logger.info(f"[TRENDS-EMBEDDINGS] Erros: {error_count} trends")
+        
+        return {
+            "total": total_trends,
+            "processed": processed_count,
+            "success": update_count,
+            "errors": error_count,
+            "elapsed_time": elapsed_time
+        }
+    
+    except Exception as e:
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        logger.error(f"[TRENDS-EMBEDDINGS] ERRO CRÍTICO: {str(e)}")
+        logger.error(f"[TRENDS-EMBEDDINGS] Traceback: {traceback.format_exc()}")
+        
+        return {
+            "success": False,
+            "error": str(e),
+            "elapsed_time": elapsed_time
+        }
+
 
