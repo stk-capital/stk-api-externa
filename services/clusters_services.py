@@ -97,7 +97,7 @@ def executar_clustering(unique_documents):
         continue_clustering = False
         # Verificar se ainda existem clusters grandes para reclustering
         for label, count in cluster_counts.items():
-            if count > len(unique_documents) * 0.1 and label != -1:
+            if count > len(unique_documents) * 0.01 and label != -1:
                 print(f"[CLUSTERING] Reclusterizando cluster {label} com {count} posts")
                 continue_clustering = True
                 # Subclustering sem o parâmetro store_centers
