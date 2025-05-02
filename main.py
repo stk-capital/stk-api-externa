@@ -230,7 +230,7 @@ async def startup_event():
         # Inicia o agendador do pipeline de clustering (executa a cada hora)
         logger.info("[STARTUP] Iniciando agendador do pipeline de clustering")
         try:
-            task = asyncio.create_task(cluster_pipeline_scheduler())
+            # task = asyncio.create_task(cluster_pipeline_scheduler())
             logger.info("[STARTUP] Agendador do pipeline de clustering iniciado com sucesso")
         except Exception as e:
             logger.error(f"[STARTUP] ERRO ao iniciar agendador do pipeline de clustering: {str(e)}")
