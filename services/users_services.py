@@ -53,8 +53,11 @@ def create_users_from_companies():
                 final_handle = f"{clean_handle}{suffix}"
                 suffix += 1
 
-            # Obter logo da empresa usando Clearbit
-            company_avatar = get_company_logo(company['name'], str(company['_id']))
+            # Tentar baixar o logo (gera arquivo em /tmp) mas o avatar salvo
+            # sempre referencia o caminho padronizado – isso garante que o
+            # front exiba placeholder caso o arquivo não exista.
+            _ = get_company_logo(company['name'], str(company['_id']))
+            company_avatar = f"/api/images/tmp/company_logos/{company['_id']}.png"
             
             # Create and insert user
             user = User(
@@ -141,7 +144,11 @@ def get_or_create_users_by_companies(company_ids: List[str]) -> Dict[str, List[s
             final_handle = f"{clean_handle}{suffix}"
             suffix += 1
 
-        company_avatar = get_company_logo(company['name'], cid)
+        # Tentar baixar o logo (gera arquivo em /tmp) mas o avatar salvo
+        # sempre referencia o caminho padronizado – isso garante que o
+        # front exiba placeholder caso o arquivo não exista.
+        _ = get_company_logo(company['name'], cid)
+        company_avatar = f"/api/images/tmp/company_logos/{cid}.png"
 
         user_obj = User(
             companyId=cid,
