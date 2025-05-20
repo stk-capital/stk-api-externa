@@ -50,7 +50,7 @@ Candidates are provided in descending order of similarity (highest similarity fi
 Return the result as a JSON array with a single object. For example:
 
 [
-    {
+    {{
         "id": "12345abc",
         "name": "Grupo Pão de Açúcar",
         "ticker": "PAAC",
@@ -59,37 +59,48 @@ Return the result as a JSON array with a single object. For example:
         "description": "Retail store group with extensive market presence...",
         "sector": "Consumer Discretionary",
         "already_exists": true
-    }
+    }}
 ]
 
 # Example
 
 **Input:**
 
-    ticker: "Pão de Açúcar"
+```json
 
-    candidates:
-    1.
-       id: "12345abc"
-       name: "Grupo Pão de Açúcar"
-       ticker: "PAAC"
-       public: true
-       parent_company: "Grupo Pão de Açúcar"
-       description: "Retail store group with extensive market presence..."
-       sector: "Consumer Discretionary"
-    2.
-       id: "67890xyz"
-       name: "Acucar Uniao"
-       ticker: "ACUN"
-       public: true
-       parent_company: "Acucar Uniao"
-       description: "Chain of supermarkets with a regional focus..."
-       sector: "Consumer Staples"
+{{ "ticker": "Pão de Açúcar",
+
+    "candidates":[
+    
+            {{ 
+                "id": "12345abc",
+                "name": "Grupo Pão de Açúcar",
+                "ticker": "PAAC",
+                "public": true,
+                "parent_company": "Grupo Pão de Açúcar",
+                "description": "Retail store group with extensive market presence...",
+                "sector": "Consumer Discretionary"
+            }},
+            {{
+        
+                "id": "67890xyz",
+                "name": "Acucar Uniao",
+                "ticker": "ACUN",
+                "public": true,
+                "parent_company": "Acucar Uniao",
+                "description": "Chain of supermarkets with a regional focus...",
+                "sector": "Consumer Staples"
+            }}]
+}}
+                
+```
 
 **Output (if a candidate is determined to be a clear match):**
 
+```json
+
 [
-    {
+    {{
         "id": "12345abc",
         "name": "Grupo Pão de Açúcar",
         "ticker": "PAAC",
@@ -98,13 +109,17 @@ Return the result as a JSON array with a single object. For example:
         "description": "Retail store group with extensive market presence...",
         "sector": "Consumer Discretionary",
         "already_exists": true
-    }
+    }}
 ]
+
+```
 
 **Output (if no candidate is a strong match):**
 
+```json
+
 [
-    {
+    {{
         "name": "Pão de Açúcar",
         "ticker": "PCAR",
         "public": true,
@@ -112,9 +127,15 @@ Return the result as a JSON array with a single object. For example:
         "description": "Brazilian retail company operating in the food sector.",
         "sector": "Consumer Staples",
         "already_exists": false
-    }
+    }}
 ]
+
+```
 
 If none of the candidates is deemed a strong match, use your best judgment to generate the output with appropriate values for each field and set `"already_exists": false`.
 
 Follow the output format exactly.
+
+<InputCompanyData>
+{input_data}
+</InputCompanyData>

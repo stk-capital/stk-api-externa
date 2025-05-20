@@ -8,7 +8,7 @@ from bson.objectid import ObjectId
 import logging
 from util.parsing_utils import extract_json_from_content
 import os
-from util.llm_services import execute_with_threads, execute_async
+from util.llm_services import execute_llm_with_threads, execute_llm_async
 from datetime import datetime, timedelta
 import statistics
 from util.posts_utils import deduplicate_posts
@@ -19,6 +19,7 @@ import pymongo
 import numpy as np
 from hdbscan import HDBSCAN
 from util.embedding_utils import get_embedding
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,8 @@ def obter_posts_com_embeddings(posts_coll, dias=7):
 def executar_clustering(unique_documents):
     """
     Executa o clustering HDBSCAN nos documentos e realiza reclustering em clusters grandes.
+    post_collection = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
+    unique_documents=obter_posts_com_embeddings(post_collection)[0]
     """
     # Preparar arrays para clustering diretamente com os documentos únicos
     logger.info("[CLUSTERING] Preparando arrays de embeddings para HDBSCAN")
@@ -91,55 +94,83 @@ def executar_clustering(unique_documents):
             cluster_counts[label] = 0
         cluster_counts[label] += 1
 
-    # Reclustering de clusters grandes (>10% do total)
+    # Reclustering de clusters grandes (>threshold) com salvaguardas contra loops infinitos
+    max_iterations = 100  # safety-limit para evitar loops infinitos
+    iteration = 0
     continue_clustering = True
-    while continue_clustering:
+    while continue_clustering and iteration < max_iterations:
+        iteration += 1
+        logger.info(f"[CLUSTERING] Iteração de reclustering {iteration}/{max_iterations}")
         continue_clustering = False
         # Verificar se ainda existem clusters grandes para reclustering
         for label, count in cluster_counts.items():
-            if count > len(unique_documents) * 0.01 and label != -1:
-                print(f"[CLUSTERING] Reclusterizando cluster {label} com {count} posts")
-                continue_clustering = True
-                # Subclustering sem o parâmetro store_centers
-                subclustering = HDBSCAN(min_cluster_size=5, metric="euclidean")
-                logger.info(f"[CLUSTERING] Reclusterizando cluster {label} com {count} posts")
-                
-                # Encontrar embeddings para este cluster
-                cluster_mask = (labels == label)
-                subcluster_embeddings = embeddings[cluster_mask]
-                
-                # Reclustering do cluster
-                max_label = max(labels)
-                new_labels = subclustering.fit_predict(subcluster_embeddings)
+            #label = 3
+            #count =1781
+            # Threshold relativo ao total de documentos; pula clusters que já são pequenos o suficiente
+            if label == -1:
+                continue  # ignora ruído
 
-                # Criar uma máscara para distinguir ruído de clusters válidos
-                mask_valid = new_labels != -1
-                new_labels_adjusted = np.where(mask_valid, new_labels + max_label, -1)
+            threshold = max(2 * 5, int(len(unique_documents) * 0.01))  # min 2*min_cluster_size (10) ou 1% do total
 
-                # Atualizar os rótulos originais
-                labels[cluster_mask] = new_labels_adjusted
-                
-                # Calcular centroides dos novos subclusters manualmente
-                for sublabel in set(new_labels):
-                    if sublabel != -1:  # Ignorar pontos de ruído
-                        new_label = sublabel + max_label
-                        # Encontrar embeddings para este subcluster
-                        submask = (new_labels == sublabel)
-                        subcluster_points = subcluster_embeddings[submask]
-                        # Calcular centroide
-                        subcentroid = np.mean(subcluster_points, axis=0)
-                        centroids[new_label] = subcentroid.tolist()
-                
-                # Atualizar contagem de clusters após reclustering
-                cluster_counts = {}
-                for label_updated in labels:
-                    if label_updated not in cluster_counts:
-                        cluster_counts[label_updated] = 0
-                    cluster_counts[label_updated] += 1
-                
-                # Sair do loop for para recomeçar a verificação com os novos clusters
-                break
+            if count <= threshold:
+                continue  # cluster dentro do tamanho aceitável
+
+            # Se já tentou dividir um cluster pequeno que não pode ser subdividido, evitar loop
+            if count <= 2 * 5:  # 2 * min_cluster_size
+                logger.info(f"[CLUSTERING] Cluster {label} tem {count} posts (<=10) e não será subdividido novamente")
+                continue
+
+            # Se chegou aqui, cluster é considerado grande e será reclusterizado
+            print(f"[CLUSTERING] Reclusterizando cluster {label} com {count} posts")
+            continue_clustering = True
+            # Subclustering sem o parâmetro store_centers
+            subclustering = HDBSCAN(min_cluster_size=5, metric="euclidean")
+            logger.info(f"[CLUSTERING] Reclusterizando cluster {label} com {count} posts")
             
+            # Encontrar embeddings para este cluster
+            cluster_mask = (labels == label)
+            subcluster_embeddings = embeddings[cluster_mask]
+            
+            # Reclustering do cluster
+            max_label = max(labels)
+            new_labels = subclustering.fit_predict(subcluster_embeddings)
+
+            # subcluster count
+            subcluster_count = {}
+            for label in new_labels:
+                if label not in subcluster_count:
+                    subcluster_count[label] = 0
+                subcluster_count[label] += 1
+            print(f"[CLUSTERING] Subcluster count: {subcluster_count}")
+
+            # Criar uma máscara para distinguir ruído de clusters válidos
+            mask_valid = new_labels != -1
+            new_labels_adjusted = np.where(mask_valid, new_labels + max_label, -1)
+
+            # Atualizar os rótulos originais
+            labels[cluster_mask] = new_labels_adjusted
+            
+            # Calcular centroides dos novos subclusters manualmente
+            for sublabel in set(new_labels):
+                if sublabel != -1:  # Ignorar pontos de ruído
+                    new_label = sublabel + max_label
+                    # Encontrar embeddings para este subcluster
+                    submask = (new_labels == sublabel)
+                    subcluster_points = subcluster_embeddings[submask]
+                    # Calcular centroide
+                    subcentroid = np.mean(subcluster_points, axis=0)
+                    centroids[new_label] = subcentroid.tolist()
+            
+            # Atualizar contagem de clusters após reclustering
+            cluster_counts = {}
+            for label_updated in labels:
+                if label_updated not in cluster_counts:
+                    cluster_counts[label_updated] = 0
+                cluster_counts[label_updated] += 1
+            
+            # Sair do loop for para recomeçar a verificação com os novos clusters
+            break
+        
         # Log dos resultados do clustering
         noise_count = cluster_counts.get(-1, 0)
         cluster_count = len(cluster_counts) - (1 if -1 in cluster_counts else 0)
@@ -149,6 +180,9 @@ def executar_clustering(unique_documents):
             if label != -1:
                 logger.info(f"[CLUSTERING] Cluster {label}: {count} posts")
         
+        if iteration == max_iterations:
+            logger.warning("[CLUSTERING] Limite máximo de iterações atingido durante reclustering – pode haver clusters grandes restantes")
+    
     # Organizar resultados
     return labels, post_ids, cluster_counts, centroids
 
@@ -895,7 +929,7 @@ def process_clusters(max_workers=10, model_name="gemini-2.5-pro-preview-03-25", 
         # Executar todos os prompts em paralelo
         logger.info(f"[PROCESSO-CLUSTERS] Enviando {len(all_prompts)} prompts para processamento em paralelo")
         
-        raw_responses = execute_with_threads(
+        raw_responses = execute_llm_with_threads(
             all_prompts,
             model_name=model_name,
             max_tokens=max_tokens,
@@ -1413,5 +1447,222 @@ def reorganizar_clusters_posts(max_workers=20, batch_size=100):
             "success": False,
             "error": str(e),
             "elapsed_time": elapsed_time
+        }
+
+def recluster_large_existing_clusters(threshold_ratio: float = 0.01, min_cluster_size: int = 5, max_workers: int = 10):
+    """Reclusteriza clusters existentes que ficaram muito grandes.
+
+    O tamanho limite é definido como *threshold_ratio* da média de posts
+    semanais (calculada a partir de toda a coleção ``posts``). Para cada
+    cluster que exceder esse limite:
+    1. Recupera todos os seus posts com embeddings.
+    2. Executa HDBSCAN reaproveitando a função ``executar_clustering``.
+    3. Cria novos documentos de cluster com flags zeradas para
+       reprocessamento posterior (``was_processed=False``,
+       ``update_type="reprocess"``).
+    4. Insere os novos clusters e remove o cluster original.
+
+    Args:
+        threshold_ratio (float): Percentual da média de posts semanais que
+            define o tamanho máximo de um cluster (default = 1% -> 0.01).
+        min_cluster_size (int): ``min_cluster_size`` usado no HDBSCAN.
+        max_workers (int): Nº máximo de *threads* para processar clusters em
+            paralelo.
+    """
+    logger.info(
+        f"[RECLUSTER] Iniciando reclustering de clusters grandes "
+        f"(threshold_ratio={threshold_ratio}, max_workers={max_workers})"
+    )
+
+    try:
+        # Conectar às coleções
+        posts_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="posts")
+        clusters_coll = get_mongo_collection(db_name=db_name_stkfeed, collection_name="clusters")
+
+        # 1) Calcular média semanal de posts
+        total_posts = posts_coll.count_documents({})
+        if total_posts == 0:
+            logger.warning("[RECLUSTER] Nenhum post encontrado – abortando")
+            return {
+                "processed_clusters": 0,
+                "new_clusters": 0,
+                "deleted_clusters": 0,
+                "threshold": 0,
+            }
+
+        earliest_post = posts_coll.find({}, {"created_at": 1}).sort("created_at", 1).limit(1)
+        earliest_date = None
+        for doc in earliest_post:
+            earliest_date = doc.get("created_at")
+            break
+
+        if earliest_date is None:
+            logger.warning("[RECLUSTER] Não foi possível determinar a data do primeiro post – abortando")
+            return {
+                "processed_clusters": 0,
+                "new_clusters": 0,
+                "deleted_clusters": 0,
+                "threshold": 0,
+            }
+
+        weeks_span = max(1, (datetime.now() - earliest_date).days / 7)
+        avg_posts_per_week = total_posts / weeks_span
+        threshold = math.ceil(avg_posts_per_week * threshold_ratio)
+        logger.info(
+            f"[RECLUSTER] Total de posts: {total_posts}, média semanal: {avg_posts_per_week:.2f}, "
+            f"threshold calculado: {threshold}"
+        )
+
+        if threshold < min_cluster_size:
+            # Garantir que o threshold não caia abaixo do min_cluster_size do HDBSCAN
+            threshold = min_cluster_size
+            logger.info(f"[RECLUSTER] Threshold ajustado para min_cluster_size: {threshold}")
+
+        # 2) Encontrar clusters acima do threshold
+        pipeline = [
+            {"$addFields": {"posts_count": {"$size": "$posts_ids"}}},
+            {"$match": {"posts_count": {"$gt": threshold}}},
+        ]
+        large_clusters = list(clusters_coll.aggregate(pipeline))
+        total_large = len(large_clusters)
+
+        if total_large == 0:
+            logger.info("[RECLUSTER] Nenhum cluster excede o threshold – nada a fazer")
+            return {
+                "processed_clusters": 0,
+                "new_clusters": 0,
+                "deleted_clusters": 0,
+                "threshold": threshold,
+            }
+
+        logger.info(f"[RECLUSTER] Encontrados {total_large} clusters grandes para reclusterização")
+
+        # Containers para resultados globais
+        new_clusters_global = []
+        clusters_to_delete = []
+
+        # Função de processamento individual (executada em paralelo)
+        def process_cluster(cluster_doc):
+            try:
+                cluster_id = cluster_doc["_id"]
+                posts_ids = cluster_doc.get("posts_ids", [])
+                if not posts_ids:
+                    logger.warning(f"[RECLUSTER] Cluster {cluster_id} sem posts – ignorado")
+                    return []
+
+                # Buscar posts com embeddings
+                post_objects = list(
+                    posts_coll.find(
+                        {"_id": {"$in": [ObjectId(pid) for pid in posts_ids]}},
+                        {"embedding": 1, "title": 1, "content": 1, "created_at": 1},
+                    )
+                )
+
+                # Filtrar apenas posts que têm embedding
+                docs_with_embeddings = [p for p in post_objects if p.get("embedding") is not None]
+                if len(docs_with_embeddings) < min_cluster_size:
+                    logger.info(
+                        f"[RECLUSTER] Cluster {cluster_id} tem apenas {len(docs_with_embeddings)} "
+                        "posts com embedding – insuficiente para reclusterização"
+                    )
+                    return []
+
+                # Deduplicar posts (mesma lógica usada anteriormente)
+                unique_documents = deduplicate_posts(docs_with_embeddings)
+                if len(unique_documents) < min_cluster_size:
+                    logger.info(
+                        f"[RECLUSTER] Após deduplicação, cluster {cluster_id} tem "
+                        f"{len(unique_documents)} posts – ignorado"
+                    )
+                    return []
+
+                # Executar HDBSCAN reuse existente
+                labels, post_ids, cluster_counts, centroids = executar_clustering(unique_documents)
+
+                # Contar clusters válidos (excluir label -1)
+                valid_clusters = [l for l in set(labels) if l != -1]
+                if len(valid_clusters) <= 1:
+                    logger.info(
+                        f"[RECLUSTER] Reclusterização de {cluster_id} gerou {len(valid_clusters)} subcluster – "
+                        "mantendo original"
+                    )
+                    return []
+
+                # Organizar clusters por label
+                clusters, _, _ = organizar_clusters_por_label(
+                    labels, post_ids, unique_documents, centroids
+                )
+
+                # Preparar novos clusters
+                for cl in clusters:
+                    cl.pop("post_titles", None)  # Remover títulos para economizar espaço
+                    cl["was_processed"] = False
+                    cl["was_updated"] = False
+                    cl["update_type"] = "reprocess"
+                    cl.pop("summary", None)
+                    cl.pop("theme", None)
+
+                logger.info(
+                    f"[RECLUSTER] Cluster {cluster_id} dividido em {len(clusters)} sub-clusters"
+                )
+
+                # Retornar resultado para inserção
+                return [{"new_clusters": clusters, "delete_id": cluster_id}]
+            except Exception as e:
+                logger.error(f"[RECLUSTER] Erro ao processar cluster {cluster_doc.get('_id')}: {e}")
+                logger.error(traceback.format_exc())
+                return []
+
+        # Processar clusters grandes em paralelo
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_cluster, large_clusters))
+
+        # Consolidar resultados
+        for res_list in results:
+            for res in res_list:
+                new_clusters_global.extend(res["new_clusters"])  # type: ignore
+                clusters_to_delete.append(res["delete_id"])  # type: ignore
+
+        # Inserir novos clusters
+        inserted_count = 0
+        if new_clusters_global:
+            try:
+                insert_result = clusters_coll.insert_many(new_clusters_global)
+                inserted_count = len(insert_result.inserted_ids)
+                logger.info(f"[RECLUSTER] Inseridos {inserted_count} novos sub-clusters")
+            except Exception as e:
+                logger.error(f"[RECLUSTER] Falha ao inserir novos clusters: {e}")
+
+        # Remover clusters originais
+        deleted_count = 0
+        if clusters_to_delete:
+            try:
+                delete_result = clusters_coll.delete_many({"_id": {"$in": clusters_to_delete}})
+                deleted_count = delete_result.deleted_count
+                logger.info(f"[RECLUSTER] Removidos {deleted_count} clusters originais grandes")
+            except Exception as e:
+                logger.error(f"[RECLUSTER] Falha ao deletar clusters originais: {e}")
+
+        logger.info(
+            f"[RECLUSTER] Processo concluído: {total_large} analisados, "
+            f"{inserted_count} sub-clusters criados, {deleted_count} originais removidos"
+        )
+
+        return {
+            "processed_clusters": total_large,
+            "new_clusters": inserted_count,
+            "deleted_clusters": deleted_count,
+            "threshold": threshold,
+        }
+
+    except Exception as e:
+        logger.error(f"[RECLUSTER] ERRO CRÍTICO: {e}")
+        logger.error(traceback.format_exc())
+        return {
+            "processed_clusters": 0,
+            "new_clusters": 0,
+            "deleted_clusters": 0,
+            "threshold": 0,
+            "error": str(e),
         }
 

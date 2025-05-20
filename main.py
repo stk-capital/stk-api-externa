@@ -9,7 +9,7 @@ from scheduler import start_scheduler
 import asyncio
 
 from util.logs_utils import _log_processing_summary
-from services.emails_services import _process_emails
+from services.emails_services import _process_emails, _process_single_email
 from services.chunks_services import _process_chunks
 from services.users_services import _process_users
 from services.posts_services import _process_posts
@@ -226,7 +226,7 @@ async def startup_event():
         logger.info("Starting scheduler - Production mode")
         asyncio.create_task(start_scheduler())
         # Inicia o agendador do endpoint de pipeline
-        asyncio.create_task(pipeline_scheduler())
+        # asyncio.create_task(pipeline_scheduler())
         # Inicia o agendador do pipeline de clustering (executa a cada hora)
         logger.info("[STARTUP] Iniciando agendador do pipeline de clustering")
         try:
@@ -404,6 +404,24 @@ async def get_avatar_update_status():
                 }
     
     return avatar_update_status
+
+# ---------------------------------------------------------------------------
+# Email processing – single email endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/api/email/process/{email_id}")
+async def process_email_endpoint(email_id: str):
+    """Trigger processing pipeline for a single Outlook email.
+
+    Runs the synchronous `_process_single_email` in a threadpool so as not to
+    block the event loop. Returns a simple status message upon completion.
+    """
+    try:
+        await run_in_threadpool(_process_single_email, email_id)
+        return {"status": "success", "email_id": email_id}
+    except Exception as e:
+        logger.error(f"[API] Error processing single email {email_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing email: {e}")
 
 if __name__ == "__main__":
 

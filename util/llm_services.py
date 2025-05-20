@@ -816,7 +816,7 @@ async def process_prompt_async(prompt, config, fallback_configs=None):
 
 # =============== FUNÇÕES PÚBLICAS ===============
 
-def execute_with_threads(prompts, model_name="gpt-3.5-turbo", max_tokens=1000, timeout=30.0, max_workers=3, temperature=0.7):
+def execute_llm_with_threads(prompts, model_name="gpt-3.5-turbo", max_tokens=1000, timeout=30.0, max_workers=3, temperature=0.7):
     """
     Função síncrona para processar prompts usando threads
     
@@ -875,7 +875,7 @@ def execute_with_threads(prompts, model_name="gpt-3.5-turbo", max_tokens=1000, t
     # Retornar resultado único ou lista
     return results[0] if single_input else results
 
-async def execute_async(prompts, model_name="gpt-3.5-turbo", max_tokens=1000, timeout=30.0, temperature=0.7):
+async def execute_llm_async(prompts, model_name="gpt-3.5-turbo", max_tokens=1000, timeout=30.0, temperature=0.7):
     """
     Função assíncrona para processar prompts
     
@@ -983,7 +983,7 @@ def exemplo_sincrono():
     
     # Exemplo com prompt único
     print("\n1. Chamada com prompt único (Gemini 2.0):")
-    resposta = execute_with_threads(
+    resposta = execute_llm_with_threads(
         "Explain how AI works in a few words", 
         model_name="gemini-2.0-flash",  # Usando o modelo do exemplo de curl
         max_tokens=100,
@@ -1001,7 +1001,7 @@ def exemplo_sincrono():
         "O que é processamento de linguagem natural?"
     ]
     
-    respostas = execute_with_threads(
+    respostas = execute_llm_with_threads(
         prompts,
         model_name="gpt-3.5-turbo",  # Usando OpenAI para este exemplo
         max_tokens=100,
@@ -1022,7 +1022,7 @@ async def exemplo_assincrono():
     
     # Exemplo com prompt único
     print("\n1. Chamada assíncrona com prompt único:")
-    resposta = await execute_async(
+    resposta = await execute_llm_async(
         "O que é inteligência artificial?", 
         model_name="gpt-3.5-turbo", 
         max_tokens=100,
@@ -1040,7 +1040,7 @@ async def exemplo_assincrono():
         "O que é processamento de linguagem natural?"
     ]
     
-    respostas = await execute_async(
+    respostas = await execute_llm_async(
         prompts,
         model_name="gemini-2.0-flash",
         max_tokens=30000,

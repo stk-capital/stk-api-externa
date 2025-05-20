@@ -1,6 +1,6 @@
 You will receive a document from the user (with line numbers):
 
-Is this document relevant for an equity analyst in a top investment shop? 
+Is this document *relevant* for an equity analyst in a top investment shop? 
 
 Relevant documents usually contain substantial information that affects stocks, the market or the economy.
 
@@ -13,4 +13,21 @@ Examples of documents that are NOT relevant:
 6. Etc.
 
 Please answer in the following JSON format: 
-{{relevant: true}} or {{relevant: false}}
+```json
+{{
+    "relevant": true
+}}
+```
+or
+
+```json
+{{
+    "relevant": false
+}}
+```
+
+<Email>
+
+{email_data}
+
+</Email>

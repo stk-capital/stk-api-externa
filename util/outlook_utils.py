@@ -204,4 +204,36 @@ def send_notification_email(posts_created, destination_email="ruhany.aragao@gmai
 
 # if __name__ == "__main__":
 #     main()
+
+def get_email_by_id(email_id: str):
+    #email_id = "AAMkAGM2ZWMyZjEyLThkMjQtNGQzMS04ZGM2LTRhMmVhZWZhYTYyYgBGAAAAAADiynN7aLLDTINlhXpDfBwLBwA7bKgXB0usSYAR9-d72BLIAAAAAAEMAAA7bKgXB0usSYAR9-d72BLIAAIDlP_cAAA="
+    access_token = get_access_token(OUTLOOK_CLIENT_ID, OUTLOOK_AUTHORITY, OUTLOOK_CLIENT_SECRET, SCOPE)
+    url = f"https://graph.microsoft.com/v1.0/users/{USER_EMAIL}/messages/{email_id}"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    response = requests.get(url, headers=headers)
+    #format the response as a json grabbing the relevant fields
+    message = response.json()
+   
+  
+    if message.get("body") and message["body"].get("content"):
+        plain_text = extract_text_from_html(message["body"]["content"])
+    else:
+        plain_text = ""
+    
+    # Adiciona o e-mail com texto extraído à lista
+    email={
+        "id": message.get("id"),
+        "receivedDateTime": message.get("receivedDateTime"),
+        "subject": message.get("subject"),
+        "from": message.get("from", {}).get("emailAddress", {}).get("address"),
+        "body": plain_text
+    }
+
+    return email
+
+
     
