@@ -268,6 +268,12 @@ def chunkenize_single_email(email_obj: Email):
         
         # Processar com LLM
         try:
+            #print api key
+            import os
+            from dotenv import load_dotenv
+            load_dotenv()
+            #log api key
+            logger.info(f"API key: {os.getenv('GEMINI_API_KEY')}")
             results = execute_llm_with_threads(
                 prompt_parts,
                 model_name="gemini-2.0-flash",
@@ -570,6 +576,7 @@ def _process_single_email(email_id: str = ''):
     db_name_alphasync = "alphasync_db_dev"
     db_name_stkfeed = "STKFeed_dev"
     Process a single email by retrieving it from Outlook and inserting it into MongoDB.
+    email_id="AAMkAGM2ZWMyZjEyLThkMjQtNGQzMS04ZGM2LTRhMmVhZWZhYTYyYgBGAAAAAADiynN7aLLDTINlhXpDfBwLBwA7bKgXB0usSYAR9-d72BLIAAAAAAEMAAA7bKgXB0usSYAR9-d72BLIAAIRmbvHAAA="
     """
     if email_id == '':
         email_id = get_recent_emails(top_n=1)[0]["id"]
@@ -606,6 +613,9 @@ def _process_single_email(email_id: str = ''):
     #chunkenize email
     chunk_data = chunkenize_single_email(email_obj)
     chunk_objects = create_chunks_object(chunk_data, email_obj)
+    #print get lines pretty to a json file
+    # with open("logs/email_lines.json", "w") as f:
+    #     f.write(json.dumps(email_obj.get_lines_pretty(numbered=True), indent=4))
 
     #bulk insert chunks into mongodb
     if chunk_objects:
@@ -679,5 +689,3 @@ def _process_single_email(email_id: str = ''):
         logger.info(f"[POSTS] Total de posts criados a partir deste email: {total_created_posts}")
     
     return
-
-

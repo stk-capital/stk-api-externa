@@ -18,6 +18,11 @@ import re
 from util.llm_services import execute_llm_with_threads
 from concurrent.futures import ThreadPoolExecutor
 
+# normalization helpers
+from util.normalization_utils import normalize_name, normalize_ticker
+
+from pymongo import ReturnDocument
+
 def parse_companies(content: str) -> List[Dict[str, Any]]:
     cleaned = extract_json_from_content(content).strip()
     cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
@@ -378,8 +383,14 @@ def intruments_to_companies_ids_parallel(
                 if idx < len(extracted_companies) and extracted_companies[idx]:
                     company_dict = extracted_companies[idx].copy()
                     company_dict.pop("already_exists", None)
+
+                    # --- normalization ---------------------------------------------------
+                    company_dict['name'] = normalize_name(company_dict.get('name', company))
+                    company_dict['ticker'] = normalize_ticker(company_dict.get('ticker'))
+
                     company_dict['embedding'] = companies_embeddings[instruments.index(company)]
                     company_dict['created_at'] = datetime.now()
+
                     company_object = Companies(**company_dict)
                     objects_to_insert.append(company_object)
                     instruments_ids_mapping[company] = company_object.id
@@ -392,46 +403,29 @@ def intruments_to_companies_ids_parallel(
     
     logger.info(f"Objetos preparados para inserção: {objects_processed}")
 
-    # Inserir no banco de dados
+    # Upsert no banco de dados (garante unicidade via índice {name,ticker})
     if objects_to_insert:
-        try:
-            logger.info(f"Inserting {len(objects_to_insert)} new companies...")
-            companies_dicts = [c.model_dump(by_alias=True) for c in objects_to_insert]
+        logger.info(f"Upserting {len(objects_to_insert)} companies …")
 
-            # unordered bulk insert -> continue on duplicates and collect inserted ids
-            result = companies_collection.insert_many(companies_dicts, ordered=False)
-            inserted_ids = set(map(str, result.inserted_ids))
-
-            logger.info(f"Successfully inserted {len(inserted_ids)} company docs")
-
-            # Ensure mapping contains the real _id present in DB
-            for comp_doc in companies_dicts:
-                cid = str(comp_doc["_id"])
-                if cid in inserted_ids:
-                    continue  # already correct in mapping
-                # If not inserted (likely duplicate), fetch existing doc id by name
-                if not instruments_ids_mapping.get(comp_doc["name"]):
-                    try:
-                        existing = companies_collection.find_one({"name": comp_doc["name"]}, {"_id": 1})
-                        if existing and existing.get("_id"):
-                            instruments_ids_mapping[comp_doc["name"]] = str(existing["_id"])
-                    except Exception as sub_e:
-                        logger.warning(f"Failed to resolve duplicate company '{comp_doc['name']}': {sub_e}")
-        except errors.BulkWriteError as bwe:
-            logger.error(f"Bulk insert error for companies: {bwe.details}")
-            # Even with errors, some documents may have been inserted. We refresh mapping from DB.
-            existing_docs = companies_collection.find({"name": {"$in": [c.name for c in objects_to_insert]}}, {"_id": 1, "name": 1})
-            for doc in existing_docs:
-                instruments_ids_mapping[doc["name"]] = str(doc["_id"])
-        except Exception as e:
-            logger.error(f"Unexpected error inserting companies: {e}")
-    else:
-        logger.info("No new companies to insert")
+        for comp in objects_to_insert:
+            filt = {"name": comp.name, "ticker": comp.ticker}
+            try:
+                doc = companies_collection.find_one_and_update(
+                    filt,
+                    {"$setOnInsert": comp.model_dump(by_alias=True)},
+                    upsert=True,
+                    return_document=ReturnDocument.AFTER,
+                )
+                # map original instrument name (not normalized) to id
+                original_name = next(k for k, v in instruments_ids_mapping.items() if v == comp.id)
+                instruments_ids_mapping[original_name] = str(doc["_id"])
+            except Exception as e:
+                logger.error(f"Upsert failed for company '{comp.name}': {e}")
 
     logger.info("Processamento de empresas concluído com sucesso")
 
     if return_new_company_ids:
-        new_company_ids = [cid for cid in instruments_ids_mapping.values() if cid in [str(obj.id) if hasattr(obj, 'id') else obj for obj in objects_to_insert]]
+        new_company_ids = [cid for cid in instruments_ids_mapping.values() if cid in [str(obj.id) for obj in objects_to_insert]]
         return instruments_ids_mapping, new_company_ids
     return instruments_ids_mapping
 
